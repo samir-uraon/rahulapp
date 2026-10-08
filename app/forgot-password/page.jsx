@@ -69,10 +69,9 @@ export default function ForgotPassword() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6 sm:py-10 flex items-center justify-center">
-      <div className="w-full max-w-md">
-        {/* Back Button */}
-        <div className="mb-4">
+<div className="flex h-full items-center justify-center overflow-hidden bg-slate-50 px-4 py-4 sm:px-6 sm:py-8">
+  <div className="w-full max-w-md">
+    <div className="mb-4">
           <button
             type="button"
             onClick={() => {
@@ -80,8 +79,8 @@ export default function ForgotPassword() {
             }}
             className="
               inline-flex items-center gap-2
-              px-2 py-2
               rounded-lg
+              px-2 py-2
               text-sm font-semibold
               text-slate-600
               transition-all
@@ -95,49 +94,44 @@ export default function ForgotPassword() {
           </button>
         </div>
 
-        {/* Card */}
         <div
           className="
             w-full
-            bg-white
-            border border-slate-200
             rounded-2xl sm:rounded-3xl
+            border border-slate-200
+            bg-white
             p-5 sm:p-8
             shadow-sm
           "
         >
-          {/* Header */}
-          <div className="text-center mb-6 sm:mb-7">
+          <div className="mb-6 text-center sm:mb-7">
             <div
               className="
                 mx-auto mb-4
-                flex items-center justify-center
-                w-12 h-12 sm:w-14 sm:h-14
+                flex h-12 w-12 sm:h-14 sm:w-14
+                items-center justify-center
                 rounded-2xl
                 bg-indigo-50
-                text-indigo-600
-                text-xl sm:text-2xl
+                text-xl text-indigo-600 sm:text-2xl
               "
             >
               🔐
             </div>
 
-            <h2 className="text-xl sm:text-2xl font-black text-slate-900">
+            <h2 className="text-xl font-black text-slate-900 sm:text-2xl">
               Forgot Password?
             </h2>
 
-            <p className="mt-1.5 text-xs sm:text-sm leading-relaxed text-slate-500">
+            <p className="mt-1.5 text-xs leading-relaxed text-slate-500 sm:text-sm">
               Enter your email or mobile number to reset your password
             </p>
           </div>
 
-          {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Identifier */}
             <div>
               <label
                 htmlFor="identifier"
-                className="block text-xs sm:text-sm font-bold text-slate-700 mb-2"
+                className="mb-2 block text-xs font-bold text-slate-700 sm:text-sm"
               >
                 Email or Mobile Number
               </label>
@@ -158,18 +152,15 @@ export default function ForgotPassword() {
                 }
                 className={`
                   w-full
-                  bg-slate-50
                   rounded-xl
-                  px-3.5 py-3
-                  text-sm
-                  text-slate-900
                   border
+                  bg-slate-50
+                  px-3.5 py-3
+                  text-sm text-slate-900
                   outline-none
                   transition-all
-
-                  focus:ring-2
                   focus:border-transparent
-
+                  focus:ring-2
                   ${
                     identifier.length > 0 && !isIdentifierValid
                       ? "border-red-400 focus:ring-red-500"
@@ -179,32 +170,28 @@ export default function ForgotPassword() {
               />
 
               {identifier.length > 0 && !isIdentifierValid && (
-                <p className="mt-1.5 text-xs text-red-500 leading-relaxed">
+                <p className="mt-1.5 text-xs leading-relaxed text-red-500">
                   Enter a valid email address or 10-digit mobile number.
                 </p>
               )}
             </div>
 
-            {/* Submit */}
             <button
               type="submit"
               disabled={loading || !isIdentifierValid}
               className="
                 w-full
-                py-3
                 rounded-xl
                 bg-indigo-600
-                hover:bg-indigo-700
-                active:scale-[0.99]
-                text-white
-                text-sm
-                font-bold
+                py-3
+                text-sm font-bold text-white
                 shadow-md shadow-indigo-200
                 transition-all
-
+                hover:bg-indigo-700
+                active:scale-[0.99]
+                disabled:cursor-not-allowed
                 disabled:bg-indigo-400
                 disabled:shadow-none
-                disabled:cursor-not-allowed
                 disabled:hover:bg-indigo-400
               "
             >
@@ -212,17 +199,16 @@ export default function ForgotPassword() {
             </button>
           </form>
 
-          {/* Back to Login */}
-          <div className="flex justify-center mt-4">
+          <div className="mt-4 flex justify-center">
             <button
               type="button"
               onClick={() => {
                 window.location.href = "/login";
               }}
               className="
+                rounded-lg
                 px-3 py-2.5
-                text-sm
-                font-semibold
+                text-sm font-semibold
                 text-indigo-600
                 transition
                 hover:text-indigo-700
@@ -234,9 +220,8 @@ export default function ForgotPassword() {
             </button>
           </div>
 
-          {/* Footer */}
-          <div className="mt-5 sm:mt-6 pt-5 border-t border-slate-100 text-center">
-            <p className="text-[11px] sm:text-xs leading-relaxed text-slate-400">
+          <div className="mt-5 border-t border-slate-100 pt-5 text-center sm:mt-6">
+            <p className="text-[11px] leading-relaxed text-slate-400 sm:text-xs">
               💡 We'll send instructions to help you reset your password.
             </p>
           </div>

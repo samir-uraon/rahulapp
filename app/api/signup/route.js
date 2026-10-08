@@ -25,25 +25,59 @@ export async function POST(request) {
     const users = db.collection("users");
 
     const normalizedEmail = email.toLowerCase().trim();
+    const normalizedPhone = phone.trim();
+
+    await users.createIndex(
+      { email: 1 },
+      { unique: true }
+    );
+
+    await users.createIndex(
+      { phone: 1 },
+      { unique: true }
+    );
+
+    await users.createIndex(
+      { deleteAt: 1 },
+      { expireAfterSeconds: 0 }
+    );
 
     const existingUser = await users.findOne({
-      email: normalizedEmail,
+      $or: [
+        { email: normalizedEmail },
+        { phone: normalizedPhone },
+      ],
     });
 
     if (existingUser) {
-      return NextResponse.json(
-        {
-          message: "Email already registered",
-        },
-        {
-          status: 409,
-        }
-      );
+      if (existingUser.email === normalizedEmail) {
+        return NextResponse.json(
+          {
+            message: "Email already registered",
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+
+      if (existingUser.phone === normalizedPhone) {
+        return NextResponse.json(
+          {
+            message: "Phone number already registered",
+          },
+          {
+            status: 409,
+          }
+        );
+      }
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = Math.floor(
+      100000 + Math.random() * 900000
+    ).toString();
 
     const hashedOTP = await bcrypt.hash(otp, 10);
 
@@ -58,7 +92,7 @@ export async function POST(request) {
     const result = await users.insertOne({
       name: name.trim(),
       email: normalizedEmail,
-      phone: phone.trim(),
+      phone: normalizedPhone,
       password: hashedPassword,
 
       emailVerified: false,
@@ -70,11 +104,6 @@ export async function POST(request) {
 
       createdAt: new Date(),
     });
-
-    await users.createIndex(
-      { deleteAt: 1 },
-      { expireAfterSeconds: 0 }
-    );
 
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
@@ -168,9 +197,32 @@ export async function POST(request) {
         status: 201,
       }
     );
-
   } catch (error) {
     console.error("Signup error:", error);
+
+    if (error.code === 11000) {
+      if (error.keyPattern?.email) {
+        return NextResponse.json(
+          {
+            message: "Email already registered",
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+
+      if (error.keyPattern?.phone) {
+        return NextResponse.json(
+          {
+            message: "Phone number already registered",
+          },
+          {
+            status: 409,
+          }
+        );
+      }
+    }
 
     return NextResponse.json(
       {

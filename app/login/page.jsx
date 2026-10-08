@@ -229,7 +229,7 @@ export default function Login() {
             </div>
 
             {/* Forgot Password */}
-            <div className="-mt-1 flex justify-end">
+            <div className="-mt-3 flex justify-end">
               <button
                 type="button"
                 onClick={() => {

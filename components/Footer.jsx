@@ -271,7 +271,7 @@ export default function Footer() {
               </p>
 
               <Link
-                href="/bookings"
+                href="/my-bookings"
                 className="inline-flex mt-7 items-center justify-center px-6 py-3 bg-white text-indigo-600 font-semibold rounded-xl hover:bg-indigo-50 transition shadow-sm"
               >
                 View My Bookings

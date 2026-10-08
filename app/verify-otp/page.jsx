@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState } from "react";
@@ -76,10 +77,9 @@ export default function VerifyOTP() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6 sm:py-10">
-      <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-md items-center justify-center sm:min-h-[calc(100vh-5rem)]">
-        
-        <div className="w-full rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:rounded-3xl sm:p-8">
+    <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+      <div className="w-full max-w-sm sm:max-w-md">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:rounded-3xl sm:p-7 md:p-8">
 
           {/* Header */}
           <div className="mb-6 text-center sm:mb-7">
@@ -87,7 +87,7 @@ export default function VerifyOTP() {
               ✉️
             </div>
 
-            <h2 className="text-xl font-black text-slate-900 sm:text-2xl">
+            <h2 className="text-xl font-black tracking-tight text-slate-900 sm:text-2xl md:text-[26px]">
               Verify Your Email
             </h2>
 
@@ -95,13 +95,13 @@ export default function VerifyOTP() {
               We've sent a 6-digit OTP to
             </p>
 
-            <p className="mt-1 break-all px-2 text-sm font-bold text-indigo-600 sm:text-base">
+            <p className="mx-auto mt-1 max-w-full break-all px-1 text-sm font-bold text-indigo-600 sm:px-2 sm:text-base">
               {email}
             </p>
           </div>
 
           {/* OTP Form */}
-          <form onSubmit={handleVerifyOTP} className="space-y-4">
+          <form onSubmit={handleVerifyOTP} className="space-y-4 sm:space-y-5">
             <div>
               <label
                 htmlFor="otp"
@@ -124,10 +124,10 @@ export default function VerifyOTP() {
                 placeholder="Enter 6-digit OTP"
                 required
                 aria-label="6-digit OTP"
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-center text-lg font-bold tracking-[0.35em] text-slate-900 outline-none transition focus:border-transparent focus:ring-2 focus:ring-indigo-500 sm:px-3.5 sm:py-3.5 sm:text-xl sm:tracking-[0.5em]"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-center text-base font-bold tracking-[0.3em] text-slate-900 outline-none transition focus:border-transparent focus:ring-2 focus:ring-indigo-500 sm:py-3.5 sm:text-lg sm:tracking-[0.4em] md:text-xl md:tracking-[0.5em]"
               />
 
-              <p className="mt-2 text-center text-[11px] text-slate-400 sm:text-xs">
+              <p className="mt-2 text-center text-[10px] leading-relaxed text-slate-400 sm:text-xs">
                 Enter the 6-digit code sent to your email
               </p>
             </div>
@@ -136,7 +136,7 @@ export default function VerifyOTP() {
             <button
               type="submit"
               disabled={loading || otp.length !== 6}
-              className="w-full rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white shadow-md shadow-indigo-200 transition-all hover:bg-indigo-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-indigo-400 disabled:shadow-none"
+              className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-md shadow-indigo-200 transition-all hover:bg-indigo-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-indigo-400 disabled:shadow-none sm:py-3.5 sm:text-base"
             >
               {loading
                 ? "Verifying & Logging in..."
@@ -157,12 +157,13 @@ export default function VerifyOTP() {
 
           {/* Bottom Info */}
           <div className="mt-5 border-t border-slate-100 pt-5 text-center sm:mt-6">
-            <p className="text-[11px] leading-relaxed text-slate-400 sm:text-xs">
+            <p className="text-[10px] leading-relaxed text-slate-400 sm:text-xs">
               🔐 Your OTP is required to verify your email address.
             </p>
           </div>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
+
