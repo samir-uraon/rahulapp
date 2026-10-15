@@ -16,6 +16,8 @@ export async function POST(request) {
 
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
+    
+    
 
     const user = await db.collection("users").findOne({
       $or: [
@@ -59,7 +61,7 @@ export async function POST(request) {
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: user.email,
-      subject: "Reset Your QueueEase Password",
+      subject: "Reset Your Zeric Password",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; color: #334155;">
           <h2 style="color: #0f172a;">
@@ -67,7 +69,7 @@ export async function POST(request) {
           </h2>
 
           <p>
-            We received a request to reset your QueueEase password.
+            We received a request to reset your Zeric password.
           </p>
 
           <p>

@@ -121,12 +121,11 @@ export default function Login() {
           {/* Header */}
           <div className="mb-5 text-center sm:mb-7">
             <h2 className="text-xl font-black tracking-tight text-slate-900 sm:text-2xl">
-              Welcome to QueueEase
+              Welcome to Zeric
             </h2>
 
             <p className="mx-auto mt-1.5 max-w-xs text-[11px] leading-relaxed text-slate-500 sm:text-sm">
-              Book tokens for yourself, children, or elderly family members
-            </p>
+Made simpler and Much faster            </p>
           </div>
 
           {/* Login / Signup Toggle */}

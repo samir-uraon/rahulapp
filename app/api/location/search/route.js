@@ -8,7 +8,7 @@ export async function GET(request) {
 
     if (!query || !query.trim()) {
       return NextResponse.json([]);
-    }
+    } 
 
     const url =
       `https://nominatim.openstreetmap.org/search` +

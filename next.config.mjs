@@ -3,7 +3,7 @@ const nextConfig = {
   reactCompiler: true,
 
   allowedDevOrigins: [
-    "172.18.2.22",
+    "10.242.215.117",
   ],
 };
 

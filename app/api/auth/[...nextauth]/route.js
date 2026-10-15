@@ -50,6 +50,10 @@ export const authOptions = {
             return null;
           }
 
+          if(!user.password){
+            return null
+          }
+
           const passwordMatch = await bcrypt.compare(
             credentials.password,
             user.password
@@ -77,67 +81,94 @@ export const authOptions = {
     strategy: "jwt",
   },
 
-  callbacks: {
-    async signIn({ user, account }) {
-      if (account?.provider === "google") {
-        try {
-          const client = await clientPromise;
-          const db = client.db("rahul");
-          const users = db.collection("users");
+callbacks: {
+  async signIn({ user, account }) {
+    if (account?.provider === "google") {
+      try {
+        const client = await clientPromise;
+        const db = client.db("rahul");
+        const users = db.collection("users");
 
-          const existingUser = await users.findOne({
-            email: user.email,
-          });
+        const existingUser = await users.findOne({
+          email: user.email,
+        });
 
-          if (existingUser) {
-            user.id = existingUser._id.toString();
-            user.name = existingUser.name;
-            user.email = existingUser.email;
-              user.phone = existingUser.phone;
-
-            return true;
-          }
-
-          await users.insertOne({
-            name: user.name,
-            email: user.email,
-            phone: "",
-            password: "",
-            createdAt: new Date(),
-          });
+        if (existingUser) {
+          user.id = existingUser._id.toString();
+          user.name = existingUser.name;
+          user.email = existingUser.email;
+          user.phone = existingUser.phone || "";
 
           return true;
-        } catch (error) {
-          console.error("Google authentication error:", error);
-          return false;
         }
+
+        const result = await users.insertOne({
+          name: user.name,
+          email: user.email,
+          phone: "",
+          password: null,
+          createdAt: new Date(),
+        });
+
+        user.id = result.insertedId.toString();
+        user.phone = "";
+
+        return true;
+      } catch (error) {
+        console.error("Google authentication error:", error);
+        return false;
+      }
+    }
+
+    return true;
+  },
+
+  async jwt({ token, user, trigger, session }) {
+    if (user) {
+      token.id = user.id;
+      token.name = user.name;
+      token.email = user.email;
+      token.phone = user.phone || "";
+    }
+
+    if (trigger === "update" && session) {
+      if (session.name !== undefined) {
+        token.name = session.name;
       }
 
-      return true;
-    },
+      if (session.phone !== undefined) {
+        token.phone = session.phone;
+      }
 
-  async jwt({ token, user, trigger, session }) 
-  { if (user) { token.name = user.name; token.email = user.email; token.phone = user.phone; } 
-  if (trigger === "update" && session) { 
-    if (session.name !== undefined) { 
-      token.name = session.name; 
-    } 
-      if (session.phone !== undefined)
-         { token.phone = session.phone; 
+      if (session.location !== undefined) {
+        token.location = session.location;
+      }
 
-         } if (session.location !== undefined)
-           { token.location = session.location; } 
-           if (session.latitude !== undefined) { token.latitude = session.latitude; } if (session.longitude !== undefined) { token.longitude = session.longitude; } } return token; }, 
-  async session({ session, token }) 
-  { if (session.user) { 
-    session.user.name = token.name; 
-    session.user.email = token.email; 
-    session.user.phone = token.phone; 
-    session.user.location = token.location || ""; 
-    session.user.latitude = token.latitude ?? null; 
-    session.user.longitude = token.longitude ?? null; } 
-    return session; 
-  }, 
+      if (session.latitude !== undefined) {
+        token.latitude = session.latitude;
+      }
+
+      if (session.longitude !== undefined) {
+        token.longitude = session.longitude;
+      }
+    }
+
+    return token;
+  },
+
+  async session({ session, token }) {
+    if (session.user) {
+      session.user.id = token.id;
+      session.user.name = token.name;
+      session.user.email = token.email;
+      session.user.phone = token.phone || "";
+      session.user.location = token.location || "";
+      session.user.latitude = token.latitude ?? null;
+      session.user.longitude = token.longitude ?? null;
+    }
+
+    return session;
+  },
 },
 
   pages: {

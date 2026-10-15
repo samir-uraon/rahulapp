@@ -9,7 +9,7 @@ export default function Services() {
      
       description:
         "Haircuts, beard grooming, head massage & men styling",
-      actionText: "View Services (5 Shops)",
+      actionText: "View Services",
       iconBg: "bg-amber-50",
       badgeBg: "bg-blue-50",
       badgeText: "text-blue-600 border-blue-200",
@@ -22,7 +22,7 @@ export default function Services() {
       
       description:
         "Facial, threading, waxing, hair spa & bridal care",
-      actionText: "View Services (4 Parlours)",
+      actionText: "View Services",
       iconBg: "bg-pink-50",
       badgeBg: "bg-pink-50",
       badgeText: "text-pink-600 border-pink-200",
@@ -35,7 +35,7 @@ export default function Services() {
       badge: "DOCTORS",
       description:
         "Dental, Pediatric (Child), General OPD & Skin specialists",
-      actionText: "View Doctor (5 Clinics)",
+      actionText: "View Docto",
       iconBg: "bg-blue-50",
       badgeBg: "bg-emerald-50",
       badgeText: "text-emerald-600 border-emerald-200",
@@ -48,7 +48,7 @@ export default function Services() {
       badge: "PATHOLOGY",
       description:
         "Blood tests, Thyroid, Full Body checkups & Lab Doctors",
-      actionText: "View Doctor (4 Labs)",
+      actionText: "View Doctor",
       iconBg: "bg-emerald-50",
       badgeBg: "bg-indigo-50",
       badgeText: "text-indigo-600 border-indigo-200",

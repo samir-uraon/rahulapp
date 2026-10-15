@@ -14,12 +14,12 @@ export default function Hero() {
         </p>
       </div>
 
-      <Link
+      {/*<Link
         href="/my-bookings"
         className="w-full rounded-xl bg-indigo-600 px-5 py-2.5 text-center text-sm font-semibold text-white transition hover:bg-indigo-700 sm:w-auto sm:shrink-0"
       >
         My Bookings
-      </Link>
+      </Link>*/}
 
     </section>
   );

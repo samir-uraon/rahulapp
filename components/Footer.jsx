@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -68,7 +69,7 @@ export default function Footer() {
     <footer className="mt-10">
 
       {/* =====================================================
-          HOW QUEUEEASE WORKS
+          HOW Zeric WORKS
       ====================================================== */}
 
       <section className="bg-white border-y border-gray-200">
@@ -83,7 +84,7 @@ export default function Footer() {
             </p>
 
             <h2 className="mt-2 text-3xl font-bold text-gray-900">
-              How QueueEase Works
+              How Zeric Works
             </h2>
 
             <p className="mt-3 text-gray-500 max-w-2xl mx-auto">
@@ -179,7 +180,7 @@ export default function Footer() {
 
 
       {/* =====================================================
-          WHY QUEUEEASE
+          WHY Zeric
       ====================================================== */}
 
       <section className="bg-gray-50">
@@ -190,7 +191,7 @@ export default function Footer() {
           <div className="text-center">
 
             <p className="text-sm font-semibold text-indigo-600 uppercase tracking-wider">
-              Why QueueEase?
+              Why Zeric?
             </p>
 
             <h2 className="mt-2 text-3xl font-bold text-gray-900">
@@ -198,7 +199,7 @@ export default function Footer() {
             </h2>
 
             <p className="mt-3 text-gray-500 max-w-2xl mx-auto">
-              QueueEase helps you plan your visit instead of spending
+              Zeric helps you plan your visit instead of spending
               your time waiting in a queue.
             </p>
 
@@ -307,20 +308,27 @@ export default function Footer() {
                 className="flex items-center gap-2"
               >
 
-                <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center">
-                  <span className="text-white font-bold">
-                    Q
-                  </span>
-                </div>
+            
+
+<div className="w-9 h-9 rounded-lg overflow-hidden flex items-center justify-center">
+  <Image
+    src="/logo.png"
+    alt="Zeric"
+    width={36}
+    height={36}
+    className="w-full h-full object-contain"
+    priority
+  />
+</div>
 
                 <span className="text-lg font-bold text-gray-900">
-                  QueueEase
+                  Zeric
                 </span>
 
               </Link>
 
               <p className="mt-2 text-sm text-gray-500">
-                Smart booking. Less waiting.
+                Made Simple and Much Faster
               </p>
 
             </div>
@@ -372,7 +380,7 @@ export default function Footer() {
           <div className="flex flex-col sm:flex-row items-center justify-between gap-2">
 
             <p className="text-xs text-gray-400">
-              © 2026 QueueEase. All rights reserved.
+              © 2026 Zeric. All rights reserved.
             </p>
 
             <p className="text-xs text-gray-400">
