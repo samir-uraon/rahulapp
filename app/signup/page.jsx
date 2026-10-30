@@ -140,7 +140,7 @@ export default function Signup() {
             ←
           </span>
 
-          <span>Home</span>
+          <span>Back</span>
         </button>
       </div>
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-md items-center justify-center sm:min-h-[calc(100vh-5rem)]">
