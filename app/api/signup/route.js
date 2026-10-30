@@ -108,7 +108,7 @@ export async function POST(request) {
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: normalizedEmail,
-      subject: "QueueEase - Verify Your Email",
+      subject: "Zeric - Verify Your Email",
       html: `
         <div style="
           font-family: Arial, sans-serif;
@@ -124,7 +124,7 @@ export async function POST(request) {
             color: #4f46e5;
             text-align: center;
           ">
-            QueueEase
+            Zeric
           </h2>
 
           <p>
@@ -132,7 +132,7 @@ export async function POST(request) {
           </p>
 
           <p>
-            Thank you for creating your QueueEase account.
+            Thank you for creating your Zeric account.
           </p>
 
           <p>
@@ -181,7 +181,7 @@ export async function POST(request) {
             color: #94a3b8;
             font-size: 12px;
           ">
-            QueueEase — Book tokens. Save time.
+            Zeric — Book tokens. Save time.
           </p>
 
         </div>
