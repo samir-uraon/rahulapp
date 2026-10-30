@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { Ticket } from "lucide-react";
+import { Ticket, ChevronRight, Gift } from "lucide-react";
 
 export default function Header({ user, showBack = false }) {
   const { data: session } = useSession();
@@ -15,43 +15,46 @@ export default function Header({ user, showBack = false }) {
   const initial = userName.charAt(0).toUpperCase();
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-gray-200 bg-white">
-      <div className="mx-auto flex h-[64px] w-full max-w-7xl items-center justify-between gap-1 px-2 sm:h-[78px] sm:gap-4 sm:px-6 lg:px-8 px-5">
+    <header className="sticky top-0 z-50 w-full border-b border-gray-200 bg-white/95 backdrop-blur-md">
+      <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between gap-2 px-3 sm:h-[76px] sm:gap-4 sm:px-6 lg:px-8">
+
         {/* LEFT SIDE */}
-        <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-4">
+
+          {/* BACK BUTTON */}
           {showBack && (
             <button
               type="button"
               onClick={() => router.back()}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 sm:h-9 sm:w-9"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-600 transition hover:bg-gray-100 active:scale-95"
               aria-label="Go back"
             >
-              <span className="text-2xl leading-none">‹</span>
+              <span className="mb-1 text-2xl leading-none">‹</span>
             </button>
           )}
 
           {/* LOGO AND BRAND */}
           <Link
             href="/"
-            className="flex min-w-0 items-center gap-1.5 sm:gap-2.5"
+            className="group flex min-w-0 items-center gap-2 sm:gap-3"
           >
-            <div className="h-9 w-9 shrink-0 overflow-hidden rounded-lg sm:h-10 sm:w-10">
+            <div className="h-9 w-9 shrink-0 overflow-hidden rounded-xl bg-white sm:h-11 sm:w-11">
               <Image
                 src="/logo.png"
                 alt="Zeric Logo"
-                width={40}
-                height={40}
-                className="h-full w-full object-contain"
+                width={44}
+                height={44}
+                className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-105"
                 priority
               />
             </div>
 
             <div className="min-w-0">
-              <h1 className="text-sm font-bold leading-tight text-gray-900 sm:text-lg">
+              <h1 className="text-base font-extrabold leading-tight tracking-tight text-gray-900 sm:text-xl">
                 Zeric
               </h1>
 
-              <p className=" whitespace-nowrap text-xs text-gray-500 sm:block sm:text-sm">
+              <p className="hidden whitespace-nowrap text-[11px] text-gray-500 sm:block sm:text-xs">
                 Made Simpler & Much Faster
               </p>
             </div>
@@ -60,51 +63,84 @@ export default function Header({ user, showBack = false }) {
 
         {/* RIGHT SIDE */}
         <div className="flex shrink-0 items-center gap-5 sm:gap-4">
-          {/* MY BOOKINGS: HIDDEN ON MOBILE */}
-         
 
-
+          {/* PLANS / SUBSCRIPTION */}
           <Link
-            href="/my-bookings"
-            aria-label="My Bookings"
-            title="My Bookings"
-            className="hidden shrink-0 items-center justify-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-indigo-700 transition-colors hover:bg-indigo-100 sm:inline-flex"
+            href="/plans"
+            aria-label="View subscription plans"
+            title="Subscription Plans"
+            className="
+              group inline-flex h-9 shrink-0 items-center justify-center gap-2
+              rounded-full border border-indigo-200 bg-indigo-50
+              px-3 text-indigo-700
+              transition-all duration-200
+              hover:border-indigo-300 hover:bg-indigo-100
+              active:scale-95
+              focus-visible:outline-none focus-visible:ring-2
+              focus-visible:ring-indigo-500 focus-visible:ring-offset-2
+              sm:h-10 sm:px-4
+            "
           >
-            <Ticket size={19} className="shrink-0" />
-            <span className="whitespace-nowrap text-sm">
-              My Bookings
+        <Gift
+  size={19}
+  strokeWidth={2}
+  className="shrink-0 transition-transform duration-200 group-hover:-rotate-6"
+/>
+
+            <span className="hidden whitespace-nowrap text-sm font-semibold sm:inline">
+              Plans
             </span>
           </Link>
 
           {/* DESKTOP PROFILE */}
           <Link
             href="/profile"
-            className="hidden shrink-0 items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50 px-4 py-[5px] sm:flex rounded-full border border-indigo-500 bg-indigo-50 px-3 py-1 text-indigo-700 transition-colors hover:bg-indigo-100"
+            aria-label={`Open profile for ${userName}`}
+            title="My Profile"
+            className="
+              hidden h-10 max-w-48 shrink-0 items-center gap-2
+              rounded-full border border-gray-200 bg-white
+              px-3 transition-all duration-200
+              hover:border-indigo-300 hover:bg-indigo-50
+              active:scale-95 sm:inline-flex
+              focus-visible:outline-none focus-visible:ring-2
+              focus-visible:ring-indigo-500 focus-visible:ring-offset-2
+            "
           >
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
 
-            <span className="max-w-32 truncate text-sm font-medium text-indigo-700 ">
+            <span className="max-w-32 truncate text-sm font-semibold text-gray-700">
               {userName}
             </span>
+
+       
+
+            <ChevronRight
+              size={14}
+              className="text-gray-400"
+            />
           </Link>
 
           {/* MOBILE PROFILE */}
           <Link
-    href="/my-bookings"
-    aria-label="My Bookings"
-    title="My Bookings"
-    className="sm:hidden inline-flex h-9 w-10 shrink-0 items-center justify-center rounded-full border border-indigo-200 bg-indigo-50 text-indigo-700 transition-colors hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2"
-  >
-    <Ticket size={22} strokeWidth={2} />
-  </Link>
-          <Link
             href="/profile"
             aria-label={`Open profile for ${userName}`}
-            title="Profile"
-            className="relative z-10 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 border-green-300 bg-indigo-600 text-sm font-bold text-white sm:hidden"
+            title="My Profile"
+            className="
+              relative inline-flex h-9 w-9 shrink-0 items-center
+              justify-center rounded-full border-2 border-indigo-200
+              bg-indigo-600 text-sm font-bold text-white
+              shadow-sm transition-all duration-200
+              hover:bg-indigo-700 active:scale-95
+              sm:hidden
+              focus-visible:outline-none focus-visible:ring-2
+              focus-visible:ring-indigo-500 focus-visible:ring-offset-2
+            "
           >
             {initial}
-          </Link>
+
+           </Link>
+
         </div>
       </div>
     </header>

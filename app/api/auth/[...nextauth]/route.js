@@ -86,7 +86,7 @@ callbacks: {
     if (account?.provider === "google") {
       try {
         const client = await clientPromise;
-        const db = client.db("rahul");
+        const db = client.db(process.env.MONGODB);
         const users = db.collection("users");
 
         const existingUser = await users.findOne({
@@ -107,6 +107,7 @@ callbacks: {
           email: user.email,
           phone: "",
           password: null,
+          isVerified:true,
           createdAt: new Date(),
         });
 

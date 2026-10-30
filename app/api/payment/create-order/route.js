@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import clientPromise from "@/lib/mongodb";
@@ -5,21 +6,153 @@ import Razorpay from "razorpay";
 import { randomUUID } from "crypto";
 import { ObjectId } from "mongodb";
 
-export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 export const revalidate = 0;
+
+const CATEGORIES = {
+  clinic: "clinics",
+  saloon: "saloons",
+  "beauty-parlour": "parlour",
+  "diagnostic-centre": "diagnostic",
+};
 
 const jsonResponse = (data, status = 200) =>
   NextResponse.json(data, {
     status,
     headers: {
-      "Cache-Control": "no-store",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
     },
   });
 
 const normalizeEmail = (value) =>
   typeof value === "string" ? value.trim().toLowerCase() : "";
 
-const normalizeId = (value) => String(value ?? "");
+const normalizeId = (value) => String(value ?? "").trim();
+
+function getDoctorId(value) {
+  if (typeof value === "string") return value.trim();
+
+  if (value && typeof value === "object") {
+    return normalizeId(value._id ?? value.id);
+  }
+
+  return "";
+}
+
+function getClinicIds(clinic) {
+  return [
+    normalizeId(clinic.id),
+    normalizeId(clinic._id),
+  ].filter(Boolean);
+}
+
+function getDoctorName(doctor) {
+  return doctor.fullName || doctor.name || doctor.doctorName || "";
+}
+
+function getClinicName(clinic) {
+  return clinic.name || clinic.clinicName || "";
+}
+
+function isValidDateString(value) {
+  if (typeof value !== "string") return false;
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
+}
+
+function dateStringInIndia(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(
+    parts.map(({ type, value }) => [type, value])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function addDaysToDateString(dateString, days) {
+  const [year, month, day] = dateString.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  date.setUTCDate(date.getUTCDate() + days);
+
+  return [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, "0"),
+    String(date.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function getDaySchedule(schedule, dayKey) {
+  if (!schedule || typeof schedule !== "object") return null;
+
+  const key = Object.keys(schedule).find(
+    (item) => item.toLowerCase() === dayKey.toLowerCase()
+  );
+
+  return key ? schedule[key] : null;
+}
+
+function normalizeTime(value) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+
+  const match =
+    /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i.exec(
+      String(value).trim()
+    );
+
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const period = match[3]?.toUpperCase();
+
+  if (minute > 59) return null;
+
+  if (period) {
+    if (hour < 1 || hour > 12) return null;
+    if (period === "AM" && hour === 12) hour = 0;
+    if (period === "PM" && hour !== 12) hour += 12;
+  } else if (hour > 23) {
+    return null;
+  }
+
+  return hour * 60 + minute;
+}
+
+function indiaMinutesNow() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+
+  const getPart = (type) =>
+    Number(parts.find((part) => part.type === type)?.value ?? 0);
+
+  return getPart("hour") * 60 + getPart("minute");
+}
 
 export async function POST(request) {
   try {
@@ -43,6 +176,7 @@ export async function POST(request) {
       );
     }
 
+    // 1. Authenticate the user.
     const token = await getToken({
       req: request,
       secret: authSecret,
@@ -50,10 +184,7 @@ export async function POST(request) {
 
     if (!token) {
       return jsonResponse(
-        {
-          success: false,
-          message: "Please login first.",
-        },
+        { success: false, message: "Please login first." },
         401
       );
     }
@@ -71,21 +202,20 @@ export async function POST(request) {
       );
     }
 
+    // 2. Parse request body.
     let body;
 
     try {
       body = await request.json();
     } catch {
       return jsonResponse(
-        {
-          success: false,
-          message: "Invalid request body.",
-        },
+        { success: false, message: "Invalid request body." },
         400
       );
     }
 
     const {
+      category: requestedCategory,
       clinicId,
       doctorId,
       patientName,
@@ -97,21 +227,37 @@ export async function POST(request) {
       slot,
     } = body || {};
 
+    const category = String(requestedCategory || "clinic")
+      .trim()
+      .toLowerCase();
+
+    if (!Object.hasOwn(CATEGORIES, category)) {
+      return jsonResponse(
+        { success: false, message: "Invalid booking category." },
+        400
+      );
+    }
+
+    const collectionName = CATEGORIES[category];
+    const normalizedClinicId = normalizeId(clinicId);
+    const normalizedDoctorId = normalizeId(doctorId);
+    const normalizedPatientName =
+      typeof patientName === "string" ? patientName.trim() : "";
+
     if (
-      typeof clinicId !== "string" ||
-      !clinicId.trim() ||
-      typeof doctorId !== "string" ||
-      !doctorId.trim() ||
-      typeof patientName !== "string" ||
-      !patientName.trim() ||
+      !normalizedClinicId ||
+      !normalizedPatientName ||
+      normalizedPatientName.length > 150 ||
+      String(age ?? "").trim() === "" ||
       !Number.isInteger(Number(age)) ||
       Number(age) < 0 ||
       Number(age) > 120 ||
       !["Male", "Female", "Other"].includes(gender) ||
-      typeof date !== "string" ||
+      !isValidDateString(date) ||
       typeof time !== "string" ||
-      typeof slot?.open !== "string" ||
-      typeof slot?.close !== "string"
+      !slot ||
+      typeof slot.open !== "string" ||
+      typeof slot.close !== "string"
     ) {
       return jsonResponse(
         {
@@ -122,36 +268,19 @@ export async function POST(request) {
       );
     }
 
-    const appointmentDate = new Date(`${date}T00:00:00`);
-
-    const normalizedDate =
-      `${appointmentDate.getFullYear()}-` +
-      `${String(appointmentDate.getMonth() + 1).padStart(2, "0")}-` +
-      `${String(appointmentDate.getDate()).padStart(2, "0")}`;
-
-    if (
-      Number.isNaN(appointmentDate.getTime()) ||
-      normalizedDate !== date
-    ) {
+    // Doctor IDs must be MongoDB ObjectIds.
+    if (!ObjectId.isValid(normalizedDoctorId)) {
       return jsonResponse(
-        {
-          success: false,
-          message: "Invalid appointment date.",
-        },
+        { success: false, message: "Invalid doctor ID." },
         400
       );
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // 3. Validate the appointment date using India dates.
+    const today = dateStringInIndia();
+    const lastDate = addDaysToDateString(today, 13);
 
-    const lastDate = new Date(today);
-    lastDate.setDate(lastDate.getDate() + 13);
-
-    if (
-      appointmentDate < today ||
-      appointmentDate > lastDate
-    ) {
+    if (date < today || date > lastDate) {
       return jsonResponse(
         {
           success: false,
@@ -161,13 +290,16 @@ export async function POST(request) {
       );
     }
 
+    // 4. Connect to MongoDB.
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
 
     const users = db.collection("users");
-    const clinics = db.collection("clinics");
+    const clinics = db.collection(collectionName);
+    const team = db.collection("team");
     const paymentOrders = db.collection("paymentOrders");
 
+    // 5. Find the signed-in user.
     let user = null;
 
     if (ObjectId.isValid(tokenId)) {
@@ -193,35 +325,86 @@ export async function POST(request) {
     }
 
     const userId = String(user._id);
+    const userPhone = user.phone || user.mobile || "";
     const userEmail = normalizeEmail(user.email) || tokenEmail;
 
+    // 6. Find the business using its custom ID or MongoDB ID.
+    const clinicConditions = [
+      { id: normalizedClinicId },
+      { _id: normalizedClinicId },
+    ];
+
+    if (ObjectId.isValid(normalizedClinicId)) {
+      clinicConditions.push({
+        _id: new ObjectId(normalizedClinicId),
+      });
+    }
+
     const clinic = await clinics.findOne({
-      id: String(clinicId).trim(),
+      $or: clinicConditions,
     });
 
     if (!clinic) {
       return jsonResponse(
         {
           success: false,
-          message: "Clinic not found.",
+          message: "Clinic or business not found.",
         },
         404
       );
     }
 
-    const doctor = (clinic.doctors || []).find(
-      (item) => normalizeId(item.id) === String(doctorId).trim()
-    );
+    // 7. Confirm this doctor belongs to the selected business.
+    const doctorIds = Array.isArray(clinic.doctors)
+      ? clinic.doctors.map(getDoctorId)
+      : [];
+
+    if (!doctorIds.includes(normalizedDoctorId)) {
+      return jsonResponse(
+        {
+          success: false,
+          message: "This doctor does not belong to the selected clinic.",
+        },
+        404
+      );
+    }
+
+    // 8. Load the authoritative doctor profile by ObjectId.
+    const doctor = await team.findOne({
+      _id: new ObjectId(normalizedDoctorId),
+      role: "doctor",
+      category: "clinic",
+      isActive: { $ne: false },
+    });
 
     if (!doctor) {
       return jsonResponse(
         {
           success: false,
-          message: "Doctor not found.",
+          message: "Doctor not found or currently inactive.",
         },
         404
       );
     }
+
+    const clinicIds = getClinicIds(clinic);
+    const doctorClinicId = normalizeId(doctor.clinicId);
+
+    if (doctorClinicId && !clinicIds.includes(doctorClinicId)) {
+      return jsonResponse(
+        {
+          success: false,
+          message: "Doctor is not assigned to this clinic.",
+        },
+        400
+      );
+    }
+
+    // 9. Validate the doctor's schedule.
+    const [year, month, day] = date.split("-").map(Number);
+    const appointmentDate = new Date(
+      Date.UTC(year, month - 1, day)
+    );
 
     const dayNames = [
       "sunday",
@@ -233,41 +416,101 @@ export async function POST(request) {
       "saturday",
     ];
 
-    const dayKey = dayNames[appointmentDate.getDay()];
-    const daySchedule = doctor.schedule?.[dayKey];
-
-    const matchingSlot = daySchedule?.slots?.find(
-      (item) =>
-        item.open === slot.open &&
-        item.close === slot.close
-    );
-
-    if (!daySchedule?.active || !matchingSlot) {
-      return jsonResponse(
-        {
-          success: false,
-          message: "This appointment slot is unavailable.",
-        },
-        400
-      );
-    }
-
-    if (time !== matchingSlot.open) {
-      return jsonResponse(
-        {
-          success: false,
-          message: "Invalid appointment time.",
-        },
-        400
-      );
-    }
-
-    const bookingCharge = Number(doctor.bookingCharge);
+    const dayKey = dayNames[appointmentDate.getUTCDay()];
+    const daySchedule = getDaySchedule(doctor.schedule, dayKey);
 
     if (
-      !Number.isFinite(bookingCharge) ||
-      bookingCharge <= 0
+      !daySchedule ||
+      daySchedule.active !== true ||
+      !Array.isArray(daySchedule.slots)
     ) {
+      return jsonResponse(
+        {
+          success: false,
+          message: `The doctor's schedule is inactive for ${dayKey}.`,
+        },
+        400
+      );
+    }
+
+    const requestedOpen = normalizeTime(slot.open);
+    const requestedClose = normalizeTime(slot.close);
+    const requestedTime = normalizeTime(time);
+
+    if (
+      requestedOpen === null ||
+      requestedClose === null ||
+      requestedTime === null
+    ) {
+      return jsonResponse(
+        {
+          success: false,
+          message: "Invalid appointment time format.",
+        },
+        400
+      );
+    }
+
+    const matchingSlot = daySchedule.slots.find((item) => {
+      if (!item) return false;
+
+      return (
+        normalizeTime(item.open) === requestedOpen &&
+        normalizeTime(item.close) === requestedClose
+      );
+    });
+
+    if (!matchingSlot) {
+      console.error("Appointment slot mismatch:", {
+        doctorId: normalizedDoctorId,
+        date,
+        dayKey,
+        requestedSlot: slot,
+        savedSlots: daySchedule.slots,
+      });
+
+      return jsonResponse(
+        {
+          success: false,
+          message:
+            "This appointment slot is not present in the doctor's saved schedule.",
+        },
+        400
+      );
+    }
+
+    if (normalizeTime(matchingSlot.open) !== requestedTime) {
+      return jsonResponse(
+        {
+          success: false,
+          message:
+            "Appointment time must match the selected slot's opening time.",
+        },
+        400
+      );
+    }
+
+    const slotCloseMinutes = normalizeTime(matchingSlot.close);
+
+    if (
+      date === today &&
+      slotCloseMinutes <= indiaMinutesNow()
+    ) {
+      return jsonResponse(
+        {
+          success: false,
+          message: "This appointment slot has already ended.",
+        },
+        400
+      );
+    }
+
+    // 10. Validate the booking charge from the doctor profile.
+    const bookingCharge = Number(
+      doctor.bookingCharge ?? doctor.fee
+    );
+
+    if (!Number.isFinite(bookingCharge) || bookingCharge <= 0) {
       return jsonResponse(
         {
           success: false,
@@ -278,6 +521,15 @@ export async function POST(request) {
     }
 
     const amount = Math.round(bookingCharge * 100);
+
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      return jsonResponse(
+        { success: false, message: "Invalid booking charge." },
+        400
+      );
+    }
+
+    // 11. Create the Razorpay order.
     const reference = randomUUID();
 
     const razorpay = new Razorpay({
@@ -291,13 +543,14 @@ export async function POST(request) {
       receipt: `ZR-${reference.replaceAll("-", "").slice(0, 20)}`,
       notes: {
         userId,
-        clinicId: String(clinicId).trim(),
-        doctorId: String(doctorId).trim(),
+        clinicId: normalizedClinicId,
+        doctorId: normalizedDoctorId,
         appointmentDate: date,
         bookingReference: reference,
       },
     });
 
+    // 12. Save the pending payment order.
     const now = new Date();
 
     await paymentOrders.insertOne({
@@ -307,27 +560,31 @@ export async function POST(request) {
       userId,
       userEmail,
 
-      clinicId: String(clinicId).trim(),
-      doctorId: String(doctorId).trim(),
+      category,
+      collection: collectionName,
+
+      clinicId: normalizedClinicId,
+      doctorId: normalizedDoctorId,
 
       patient: {
-        name: patientName.trim(),
-        type: patientType || "self",
+        name: normalizedPatientName,
+        phone: userPhone,
+        type:
+          typeof patientType === "string" && patientType.trim()
+            ? patientType.trim()
+            : "self",
         age: Number(age),
         gender,
       },
 
       appointment: {
         date,
-        time,
+        time: matchingSlot.open,
         slot: {
           open: matchingSlot.open,
           close: matchingSlot.close,
           ...(matchingSlot.checkupStartTime
-            ? {
-                checkupStartTime:
-                  matchingSlot.checkupStartTime,
-              }
+            ? { checkupStartTime: matchingSlot.checkupStartTime }
             : {}),
         },
       },
@@ -343,6 +600,7 @@ export async function POST(request) {
       updatedAt: now,
     });
 
+    // 13. Return Razorpay checkout details.
     return jsonResponse({
       success: true,
       key: keyId,
@@ -350,8 +608,8 @@ export async function POST(request) {
       amount: order.amount,
       currency: order.currency,
       reference,
-      clinicName: clinic.name || clinic.clinicName || "",
-      doctorName: doctor.name || doctor.doctorName || "",
+      clinicName: getClinicName(clinic),
+      doctorName: getDoctorName(doctor),
     });
   } catch (error) {
     console.error(
@@ -367,4 +625,4 @@ export async function POST(request) {
       500
     );
   }
-} 
+}

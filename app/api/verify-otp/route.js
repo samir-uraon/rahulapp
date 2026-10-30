@@ -18,7 +18,7 @@ export async function POST(request) {
     }
 
     const client = await clientPromise;
-    const db = client.db("rahul");
+    const db = client.db(process.env.MONGODB);
     const users = db.collection("users");
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -38,7 +38,7 @@ export async function POST(request) {
       );
     }
 
-    if (user.emailVerified === true) {
+    if (user.isVerified === true) {
       return NextResponse.json(
         {
           message: "Email is already verified",
@@ -90,11 +90,11 @@ export async function POST(request) {
     const updateResult = await users.updateOne(
       {
         _id: user._id,
-        emailVerified: false,
+        isVerified: false,
       },
       {
         $set: {
-          emailVerified: true,
+          isVerified: true,
           verifiedAt: new Date(),
         },
         $unset: {

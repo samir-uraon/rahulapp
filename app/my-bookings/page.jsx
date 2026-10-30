@@ -376,38 +376,7 @@ function getSavedExpectedTurn(booking) {
   );
 }
 
-function getExpectedTurnDate(booking) {
-  const saved = parseDate(getSavedExpectedTurn(booking));
 
-  if (saved) return saved;
-
-  const appointmentDate = getIndiaDateKey(getDateValue(booking));
-  if (!appointmentDate) return null;
-
-  const bookingMinutes = parseTimeForQueue(
-    getBookingTimeValue(booking)
-  );
-  const checkupMinutes = parseTimeForQueue(
-    getCheckupStartValue(booking)
-  );
-
-  const baseMinutes =
-    bookingMinutes !== null && checkupMinutes !== null
-      ? Math.max(bookingMinutes, checkupMinutes)
-      : bookingMinutes ?? checkupMinutes;
-
-  if (baseMinutes === null || baseMinutes === undefined) return null;
-
-  const waitMinutes = getWaitMinutes(booking);
-  if (waitMinutes === null) return null;
-
-  const [year, month, day] = appointmentDate.split("-").map(Number);
-
-  return new Date(
-    Date.UTC(year, month - 1, day, 0, baseMinutes + waitMinutes) -
-      330 * 60 * 1000
-  );
-}
 
 function normalizeStatus(status) {
   const value = String(status || "waiting")
@@ -417,12 +386,14 @@ function normalizeStatus(status) {
     .replaceAll(" ", "-");
 
   const aliases = {
+    wait: "waiting",
     pending: "waiting",
     booked: "confirmed",
     success: "confirmed",
     paid: "confirmed",
-    inprogress: "in-progress",
+    complete: "completed",
     canceled: "cancelled",
+    inprogress: "in-progress",
     "no-show": "skipped",
     "no-showed": "skipped",
   };
@@ -430,48 +401,12 @@ function normalizeStatus(status) {
   return aliases[value] || value;
 }
 
-function shouldMarkCompleted(booking, now = Date.now()) {
-  const status = normalizeStatus(booking.status);
-
-  if (HISTORY_STATUSES.includes(status)) {
-    return status === "completed";
-  }
-
-  const expectedTurn = getExpectedTurnDate(booking);
-  const duration = getDuration(booking);
-
-  if (!expectedTurn || duration === null) return false;
-
-  const completionTime =
-    expectedTurn.getTime() + duration * 60 * 1000;
-
-  return completionTime <= now;
+function shouldMarkCompleted(booking) {
+  return normalizeStatus(booking.status) === "completed";
 }
 
-function getDisplayStatus(booking, now = Date.now()) {
-  const status = normalizeStatus(booking.status);
-
-  if (HISTORY_STATUSES.includes(status)) {
-    return status;
-  }
-
-  const expectedTurn = getExpectedTurnDate(booking);
-  const duration = getDuration(booking);
-
-  if (expectedTurn && duration !== null) {
-    const startTime = expectedTurn.getTime();
-    const endTime = startTime + duration * 60 * 1000;
-
-    if (now >= startTime && now < endTime) {
-      return "your-turn";
-    }
-
-    if (now >= endTime) {
-      return "completed";
-    }
-  }
-
-  return status;
+function getDisplayStatus(booking) {
+  return normalizeStatus(booking.status);
 }
 
 function isHistoryStatus(status) {
@@ -493,21 +428,143 @@ function formatIndiaTime(date) {
   });
 }
 
-function getExpectedTurn(booking) {
-  const calculated = getExpectedTurnDate(booking);
 
-  if (calculated) return formatIndiaTime(calculated);
-
-  const saved = getSavedExpectedTurn(booking);
-
-  if (saved !== null && saved !== undefined && saved !== "") {
-    return formatTime(saved);
-  }
-
-  return formatTime(
-    getCheckupStartValue(booking) || getBookingTimeValue(booking)
+function getActualCheckupTime(booking) {
+  return (
+    booking.actualStartTime ??
+    booking.actualCheckupTime ??
+    booking.actualTime ??
+    booking.queue?.actualStartTime ??
+    booking.queue?.actualCheckupTime ??
+    booking.queue?.actualTime ??
+    booking.queue?.checkupTime ??
+    null
   );
 }
+
+function getEmergencyQueueInfo(booking) {
+  const queue = booking.queue || {};
+
+  const emergencyAhead = Number(
+    booking.emergencyPatientsAhead ??
+    queue.emergencyPatientsAhead ??
+    booking.emergencyAhead ??
+    queue.emergencyAhead ??
+    0
+  );
+
+  const emergencyBeingServed =
+    booking.emergencyBeingServed === true ||
+    queue.emergencyBeingServed === true ||
+    booking.isEmergencyInProgress === true ||
+    queue.isEmergencyInProgress === true;
+
+  const explicitDelay = Number(
+    booking.emergencyDelayMinutes ??
+    queue.emergencyDelayMinutes ??
+    0
+  );
+
+  const duration = getDuration(booking);
+
+  // Use a supplied delay where available. Otherwise estimate
+  // one consultation per emergency patient ahead.
+  const delayMinutes =
+    Number.isFinite(explicitDelay) && explicitDelay > 0
+      ? explicitDelay
+      : Math.max(0, emergencyAhead) * (duration || 0);
+
+  return {
+    emergencyAhead: Math.max(0, emergencyAhead),
+    emergencyBeingServed,
+    delayMinutes,
+    hasEmergencyDelay:
+      emergencyBeingServed ||
+      emergencyAhead > 0 ||
+      explicitDelay > 0,
+  };
+}
+
+function makeIndiaDateFromMinutes(dateKey, minutes) {
+  if (!dateKey || !Number.isFinite(minutes)) return null;
+
+  const [year, month, day] = dateKey.split("-").map(Number);
+
+  // Convert India local minutes to a UTC timestamp.
+  return new Date(
+    Date.UTC(year, month - 1, day, 0, minutes) -
+      330 * 60 * 1000
+  );
+}
+
+function getExpectedTurnDate(booking) {
+  const status = normalizeStatus(booking.status);
+
+  if (HISTORY_STATUSES.includes(status)) {
+    return null;
+  }
+
+  const dateKey = getIndiaDateKey(getDateValue(booking));
+
+  if (!dateKey) return null;
+
+  const actualTime = parseTimeForQueue(
+    getActualCheckupTime(booking)
+  );
+
+  const checkupTime = parseTimeForQueue(
+    getCheckupStartValue(booking)
+  );
+
+  const bookingTime = parseTimeForQueue(
+    getBookingTimeValue(booking)
+  );
+
+  const updatedAt = parseDate(
+    booking.updatedAt ?? booking.queue?.updatedAt
+  );
+
+  // An actual checkup start time takes priority over configured times.
+  const actualMinutes =
+    actualTime ??
+    (["serving", "in-progress"].includes(status) && updatedAt
+      ? getIndiaMinutes(updatedAt)
+      : null);
+
+  const baseMinutes =
+    actualMinutes ?? checkupTime ?? bookingTime;
+
+  if (baseMinutes === null || baseMinutes === undefined) {
+    return null;
+  }
+
+  // Do not add the patient's own waiting time when already serving.
+  const isServing = ["serving", "in-progress"].includes(status);
+
+  const peopleAhead = isServing ? 0 : getPeopleAhead(booking) ?? 0;
+  const duration = getDuration(booking) ?? 0;
+
+  const normalQueueWait = peopleAhead * duration;
+
+  // Add emergency delay only when the queue data reports it.
+  const emergency = getEmergencyQueueInfo(booking);
+
+  const emergencyDelay = isServing
+    ? 0
+    : emergency.delayMinutes;
+
+  return makeIndiaDateFromMinutes(
+    dateKey,
+    baseMinutes + normalQueueWait + emergencyDelay
+  );
+}
+
+function getExpectedTurn(booking) {
+  const expectedDate = getExpectedTurnDate(booking);
+
+  return expectedDate ? formatIndiaTime(expectedDate) : "";
+}
+
 
 function getBookingSortTime(booking) {
   const expected = getExpectedTurnDate(booking);
@@ -577,6 +634,45 @@ function getSlotTimes(booking) {
     start: formatTime(start),
     end: formatTime(end),
   };
+}
+
+const BOOKINGS_CACHE_TTL = 30_000;
+
+// In-memory cache survives component unmount/remount during navigation.
+const bookingsCache = new Map();
+const bookingsRequests = new Map();
+
+function getBookingsCacheKey(session) {
+  const userId = session?.user?.id;
+  const email = session?.user?.email?.trim().toLowerCase();
+
+  const identity = userId || email;
+
+  return identity ? `my-bookings:${identity}` : null;
+}
+
+function getCachedBookings(key) {
+  if (!key) return null;
+
+  const cached = bookingsCache.get(key);
+
+  if (!cached) return null;
+
+  if (Date.now() >= cached.expiresAt) {
+    bookingsCache.delete(key);
+    return null;
+  }
+
+  return cached.bookings;
+}
+
+function setCachedBookings(key, bookings) {
+  if (!key) return;
+
+  bookingsCache.set(key, {
+    bookings,
+    expiresAt: Date.now() + BOOKINGS_CACHE_TTL,
+  });
 }
 
 function StatusBadge({ status, peopleAhead }) {
@@ -874,12 +970,36 @@ function BookingCard({ booking, now }) {
               </p>
             </div>
 
-            <div className="rounded-lg bg-white p-3">
-              <p className="text-xs text-gray-500">Expected Turn</p>
-              <p className="mt-1 text-lg font-bold text-indigo-700">
-                {expectedTurn || "Not available"}
-              </p>
-            </div>
+          
+<div className="rounded-lg bg-white p-3">
+  <p className="text-xs text-gray-500">Expected Turn</p>
+
+  <p className="mt-1 text-lg font-bold text-indigo-700">
+  {expectedTurn
+    ? `${expectedTurn} (Please come before that time)`
+    : "Expected time not available"}
+</p>
+
+  {(() => {
+    const emergency = getEmergencyQueueInfo(booking);
+
+    if (!emergency.hasEmergencyDelay) return null;
+
+    return (
+      <p className="mt-2 text-xs font-medium leading-5 text-amber-700">
+        Delayed — an emergency patient may be attended to first.
+        {emergency.delayMinutes > 0
+          ? ` Estimated additional delay: ${emergency.delayMinutes} minutes.`
+          : ""}
+      </p>
+    );
+  })()}
+
+  <p className="mt-2 text-xs text-gray-500">
+    This is an estimate. Actual consultation times may change.
+  </p>
+</div>
+
           </div>
 
           <p className="mt-3 text-xs leading-5 text-gray-500">
@@ -1060,42 +1180,72 @@ export default function MyBookingsPage() {
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
 
-  const fetchBookings = useCallback(async (isRefresh = false) => {
+const userCacheKey = getBookingsCacheKey(session);
+
+const fetchBookings = useCallback(
+  async (isRefresh = false, silent = false) => {
+    if (!userCacheKey) return;
+
     try {
       if (isRefresh) {
-        setRefreshing(true);
-      } else {
+        if (!silent) setRefreshing(true);
+      } else if (!silent) {
         setLoading(true);
       }
 
       setError("");
 
-      const response = await fetch("/api/my-bookings", {
-        method: "GET",
-        cache: "no-store",
-        headers: {
-          Accept: "application/json",
-        },
-      });
+      // Reuse an existing request for the same user.
+      let requestPromise = bookingsRequests.get(userCacheKey);
 
-      const data = await response.json().catch(() => ({}));
+    if (!requestPromise) {
+  const promise = fetch("/api/my-bookings", {
+    method: "GET",
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+    },
+  }).then(async (response) => {
+    const data = await response.json().catch(() => ({}));
 
-      if (!response.ok || !data.success) {
-        throw new Error(
-          data.message || "Unable to load your bookings."
-        );
-      }
+    if (!response.ok || !data.success) {
+      throw new Error(
+        data.message || "Unable to load your bookings."
+      );
+    }
 
-      setBookings(Array.isArray(data.bookings) ? data.bookings : []);
+    return Array.isArray(data.bookings) ? data.bookings : [];
+  });
+
+  requestPromise = promise;
+  bookingsRequests.set(userCacheKey, promise);
+
+  promise.finally(() => {
+    if (bookingsRequests.get(userCacheKey) === promise) {
+      bookingsRequests.delete(userCacheKey);
+    }
+  }).catch(() => {});
+}
+
+      const freshBookings = await requestPromise;
+
+      // Only update the cache if this user is still active.
+      setCachedBookings(userCacheKey, freshBookings);
+      setBookings(freshBookings);
     } catch (err) {
       setError(
-        err?.message || "Something went wrong while loading bookings."
+        err?.message ||
+          "Something went wrong while loading bookings."
       );
     } finally {
+      // Do not remove a newer request accidentally.
+      // The request map is cleaned up in the request's lifecycle.
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  },
+  [userCacheKey]
+);
 
   useEffect(() => {
     if (sessionStatus === "loading") return;

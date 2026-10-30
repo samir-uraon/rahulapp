@@ -193,7 +193,7 @@ export default function Signup() {
                 id="name"
                 type="text"
                 name="name"
-                placeholder="e.g. Rahul Sharma"
+                placeholder="e.g. Rahul Bera"
                 value={formData.name}
                 onChange={handleChange}
                 autoComplete="name"
@@ -256,7 +256,7 @@ export default function Signup() {
                 id="phone"
                 type="tel"
                 name="phone"
-                placeholder="e.g. 9832145678"
+                placeholder="e.g. 983214XXXX"
                 value={formData.phone}
                 onChange={(e) => {
                   const value = e.target.value.replace(/\D/g, "");
@@ -366,7 +366,7 @@ export default function Signup() {
     required
     name="agree"
     id="agree"
-    className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-indigo-600 focus:ring-2 focus:ring-indigo-500"
+    className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-indigo-600  "
   />
 
   <label

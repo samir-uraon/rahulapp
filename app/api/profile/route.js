@@ -1,16 +1,37 @@
- 
+
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import clientPromise from "@/lib/mongodb";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
+export const runtime = "nodejs";
+export const revalidate = 0;
+
+const getLocation = (user) => ({
+  name: user.locationName || "",
+  type: user.locationType || "",
+  latitude: user.location?.latitude ?? user.latitude ?? null,
+  longitude: user.location?.longitude ?? user.longitude ?? null,
+});
+
+const getProfile = (user) => ({
+  id: user._id.toString(),
+  name: user.name || "",
+  email: user.email || "",
+  phone: user.phone || "",
+  address: user.address || "",
+  locationName: user.locationName || "",
+  locationType: user.locationType || "",
+  location: getLocation(user),
+});
+
 // =====================================================
 // GET PROFILE
+// GET /api/profile
 // =====================================================
 
 export async function GET() {
   try {
-    // Check if user is logged in
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.email) {
@@ -20,23 +41,16 @@ export async function GET() {
       );
     }
 
-    // Connect to MongoDB
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
 
-    // Find logged-in user
     const user = await db.collection("users").findOne(
+      { email: session.user.email },
       {
-        email: session.user.email,
-      },
-      {
-        projection: {
-          password: 0,
-        },
+        projection: { password: 0 },
       }
     );
 
-    // User not found
     if (!user) {
       return NextResponse.json(
         { message: "User not found" },
@@ -44,15 +58,14 @@ export async function GET() {
       );
     }
 
-    // Return profile
-    return NextResponse.json({
-      user: {
-        id: user._id.toString(),
-        name: user.name || "",
-        email: user.email || "",
-        phone: user.phone || "",
-      },
-    });
+    return NextResponse.json(
+      { user: getProfile(user) },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      }
+    );
   } catch (error) {
     console.error("PROFILE_GET_ERROR:", error);
 
@@ -65,11 +78,11 @@ export async function GET() {
 
 // =====================================================
 // UPDATE PROFILE
+// PUT /api/profile
 // =====================================================
 
 export async function PUT(request) {
   try {
-    // Check if user is logged in
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.email) {
@@ -79,47 +92,157 @@ export async function PUT(request) {
       );
     }
 
-    // Get data from frontend
-    const body = await request.json();
+    let body;
 
-    const name = body.name?.trim();
-    const phone = body.phone?.trim() || "";
-
-    // Validate name
-    if (!name) {
+    try {
+      body = await request.json();
+    } catch {
       return NextResponse.json(
-        { message: "Name is required" },
+        { message: "Invalid JSON body" },
         { status: 400 }
       );
     }
 
-    // Validate phone
-    if (phone && !/^[0-9]{10}$/.test(phone)) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
       return NextResponse.json(
-        { message: "Phone number must be 10 digits" },
+        { message: "Invalid request body" },
         { status: 400 }
       );
     }
 
-    // Connect to MongoDB
-    const client = await clientPromise;
-    const db = client.db(process.env.MONGODB);
+    const has = (key) =>
+      Object.prototype.hasOwnProperty.call(body, key);
 
-    // Update user
-    const result = await db.collection("users").updateOne(
-      {
-        email: session.user.email,
-      },
-      {
-        $set: {
-          name: name,
-          phone: phone,
-          updatedAt: new Date(),
-        },
+    const fieldsToUpdate = {
+      updatedAt: new Date(),
+    };
+
+    // Update ordinary profile fields only when provided.
+    if (has("name")) {
+      if (typeof body.name !== "string" || !body.name.trim()) {
+        return NextResponse.json(
+          { message: "Name is required" },
+          { status: 400 }
+        );
       }
+
+      fieldsToUpdate.name = body.name.trim();
+    }
+
+    if (has("phone")) {
+      if (typeof body.phone !== "string") {
+        return NextResponse.json(
+          { message: "Invalid phone number" },
+          { status: 400 }
+        );
+      }
+
+      const phone = body.phone.trim();
+
+      if (phone && !/^[0-9]{10}$/.test(phone)) {
+        return NextResponse.json(
+          { message: "Phone number must be 10 digits" },
+          { status: 400 }
+        );
+      }
+
+      fieldsToUpdate.phone = phone;
+    }
+
+   
+
+    // Save the selected address.
+    if (has("address")) {
+      if (typeof body.address !== "string" || !body.address.trim()) {
+        return NextResponse.json(
+          { message: "Address is required" },
+          { status: 400 }
+        );
+      }
+
+      fieldsToUpdate.address = body.address.trim();
+    }
+
+    if (has("locationName")) {
+      if (typeof body.locationName !== "string") {
+        return NextResponse.json(
+          { message: "Invalid location name" },
+          { status: 400 }
+        );
+      }
+
+      fieldsToUpdate.locationName = body.locationName.trim();
+    }
+
+    if (has("locationType")) {
+      const allowedTypes = ["current", "search", "manual"];
+
+      if (!allowedTypes.includes(body.locationType)) {
+        return NextResponse.json(
+          { message: "Invalid location type" },
+          { status: 400 }
+        );
+      }
+
+      fieldsToUpdate.locationType = body.locationType;
+    }
+
+    // Save coordinates.
+    if (has("location")) {
+      const location = body.location;
+
+      if (location === null) {
+        fieldsToUpdate.location = {
+          latitude: null,
+          longitude: null,
+        };
+      } else {
+        const latitude = location?.latitude;
+        const longitude = location?.longitude;
+
+        if (
+          typeof latitude !== "number" ||
+          typeof longitude !== "number" ||
+          !Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          latitude < -90 ||
+          latitude > 90 ||
+          longitude < -180 ||
+          longitude > 180
+        ) {
+          return NextResponse.json(
+            { message: "Valid latitude and longitude are required" },
+            { status: 400 }
+          );
+        }
+
+        fieldsToUpdate.location = {
+          latitude,
+          longitude,
+        };
+      }
+    }
+
+    const hasActualUpdate = Object.keys(fieldsToUpdate).some(
+      (key) => key !== "updatedAt"
     );
 
-    // User not found
+    if (!hasActualUpdate) {
+      return NextResponse.json(
+        { message: "No changes provided" },
+        { status: 400 }
+      );
+    }
+
+    const client = await clientPromise;
+    const db = client.db(process.env.MONGODB);
+    const users = db.collection("users");
+
+    const result = await users.updateOne(
+      { email: session.user.email },
+      { $set: fieldsToUpdate }
+    );
+
     if (result.matchedCount === 0) {
       return NextResponse.json(
         { message: "User not found" },
@@ -127,16 +250,22 @@ export async function PUT(request) {
       );
     }
 
-    // Return updated user
-    return NextResponse.json({
-      message: "Profile updated successfully",
+    const updatedUser = await users.findOne(
+      { email: session.user.email },
+      { projection: { password: 0 } }
+    );
 
-      user: {
-        name: name,
-        email: session.user.email,
-        phone: phone,
+    return NextResponse.json(
+      {
+        message: "Profile updated successfully",
+        user: getProfile(updatedUser),
       },
-    });
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      }
+    );
   } catch (error) {
     console.error("PROFILE_UPDATE_ERROR:", error);
 
@@ -146,4 +275,3 @@ export async function PUT(request) {
     );
   }
 }
-

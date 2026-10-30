@@ -22,36 +22,50 @@ import {
   Users,
 } from "lucide-react";
 
-function calculateDistance(lat1, lng1, lat2, lng2) {
+async function calculateDistance(lat1, lng1, lat2, lng2) {
+  const coordinates = [lat1, lng1, lat2, lng2].map(Number);
+
   if (
-    lat1 == null ||
-    lng1 == null ||
-    lat2 == null ||
-    lng2 == null
+    coordinates.some((value) => !Number.isFinite(value)) ||
+    Math.abs(coordinates[0]) > 90 ||
+    Math.abs(coordinates[2]) > 90 ||
+    Math.abs(coordinates[1]) > 180 ||
+    Math.abs(coordinates[3]) > 180
   ) {
     return null;
   }
 
-  const values = [lat1, lng1, lat2, lng2].map(Number);
+  const [latitude1, longitude1, latitude2, longitude2] =
+    coordinates;
 
-  if (!values.every(Number.isFinite)) return null;
+  try {
+    const url =
+      `https://router.project-osrm.org/route/v1/driving/` +
+      `${longitude1},${latitude1};${longitude2},${latitude2}` +
+      `?overview=false`;
 
-  const [latitude1, longitude1, latitude2, longitude2] = values;
-  const earthRadius = 6371;
-  const dLat = ((latitude2 - latitude1) * Math.PI) / 180;
-  const dLng = ((longitude2 - longitude1) * Math.PI) / 180;
+    const response = await fetch(url);
 
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((latitude1 * Math.PI) / 180) *
-      Math.cos((latitude2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
+    if (!response.ok) {
+      throw new Error(`Routing request failed: ${response.status}`);
+    }
 
-  return (
-    earthRadius *
-    2 *
-    Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  );
+    const data = await response.json();
+
+    if (data.code !== "Ok" || !data.routes?.length) {
+      return null;
+    }
+
+    const route = data.routes[0];
+
+    return {
+      distance: Number((route.distance / 1000).toFixed(2)),
+      duration: Math.ceil(route.duration / 60),
+    };
+  } catch (error) {
+    console.error("Road distance error:", error);
+    return null;
+  }
 }
 
 function getTodayKey(date = new Date()) {
@@ -64,6 +78,36 @@ function getTodayKey(date = new Date()) {
     "friday",
     "saturday",
   ][date.getDay()];
+}
+
+function getDoctorId(doctor) {
+  return String(doctor?._id || doctor?.id || "");
+}
+
+function getScheduleForDay(schedule, day) {
+  if (!schedule || !day) return null;
+
+  const normalizedDay = String(day).toLowerCase();
+
+  const matchingKey = Object.keys(schedule).find(
+    (key) => key.toLowerCase() === normalizedDay
+  );
+
+  return matchingKey ? schedule[matchingKey] : null;
+}
+
+function getBookingDoctorId(booking) {
+  const value =
+    booking?.doctorId ??
+    booking?.doctor?._id ??
+    booking?.doctor?.id ??
+    booking?.doctor?._id?.toString?.();
+
+  return value == null ? "" : String(value);
+}
+
+function getBookingSlot(booking) {
+  return booking?.slot || booking?.selectedSlot || {};
 }
 
 function getLocalDateKey(date = new Date()) {
@@ -119,16 +163,6 @@ function parseTime(time) {
   }
 
   return hour * 60 + minute;
-}
-
-function formatTime(date) {
-  if (!date || Number.isNaN(date.getTime())) return "Unavailable";
-
-  return date.toLocaleTimeString("en-IN", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
 }
 
 function formatSlotTime(time) {
@@ -231,27 +265,28 @@ function isActiveBooking(booking) {
 function getBookingsForSlot(doctor, dateKey, slot) {
   if (!Array.isArray(doctor?.bookings) || !slot) return [];
 
+  const doctorId = getDoctorId(doctor);
   const slotKey = getSlotKey(slot);
 
   return doctor.bookings.filter((booking) => {
-    if (getBookingDateKey(booking) !== dateKey) return false;
+    if (getBookingDateKey(booking) !== dateKey) {
+      return false;
+    }
 
-    if (!isActiveBooking(booking)) return false;
+    if (!isActiveBooking(booking)) {
+      return false;
+    }
 
-    const bookingDoctorId =
-      booking.doctorId ?? booking.doctor?.id;
+    const bookingDoctorId = getBookingDoctorId(booking);
 
     if (
-      bookingDoctorId != null &&
-      String(bookingDoctorId) !== String(doctor.id)
+      bookingDoctorId &&
+      bookingDoctorId !== doctorId
     ) {
       return false;
     }
 
-    const bookingSlot =
-      booking.slot || booking.selectedSlot || {};
-
-    return getSlotKey(bookingSlot) === slotKey;
+    return getSlotKey(getBookingSlot(booking)) === slotKey;
   });
 }
 
@@ -345,7 +380,6 @@ function calculateSlotQueue(doctor, slot, date) {
   }
 
   const now = date;
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
   if (now >= slotClose) {
     return {
@@ -532,10 +566,7 @@ function getScheduleText(schedule) {
   }
 
   return schedule.slots
-    .map(
-      (slot) =>
-        `${formatSlotTime(slot.open)} - ${formatSlotTime(slot.close)}`
-    )
+    .map((slot) => `${formatSlotTime(slot.open)} - ${formatSlotTime(slot.close)}`)
     .join(" / ");
 }
 
@@ -582,88 +613,179 @@ export default function ClinicDetailsPage() {
   const params = useParams();
   const router = useRouter();
   const { data: session, status } = useSession();
+  const sessionId = session?.user?.id;
 
-  const [clinics, setClinics] = useState([]);
-  const [loadingClinics, setLoadingClinics] = useState(true);
+  const clinicId = Array.isArray(params.id) ? params.id[0] : params.id;
+
+  const clinicCacheKey = sessionId && clinicId
+    ? `zeric-clinic-${clinicId}-${sessionId}`
+    : null;
+
+  const CLINIC_CACHE_TTL = 20_000;
+  const [clinic, setClinic] = useState(null);
+  const [loadingClinic, setLoadingClinic] = useState(true);
   const [clinicError, setClinicError] = useState("");
   const [location, setLocation] = useState("Select Location");
   const [selectedDoctor, setSelectedDoctor] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [distance, setDistance] = useState(null);
+const [distanceLoading, setDistanceLoading] = useState(false);
 
   useEffect(() => {
+    if (status === "loading" || !clinicId) return;
+
     let cancelled = false;
+    let inFlight = false;
+    let hasDisplayedData = false;
 
-    async function fetchClinics() {
+    function readCache() {
+      if (!clinicCacheKey) return null;
+
       try {
-        setClinicError("");
+        const saved = sessionStorage.getItem(clinicCacheKey);
+        if (!saved) return null;
 
-        const response = await fetch("/api/clinics", {
+        const parsed = JSON.parse(saved);
+
+        if (
+          !parsed.data ||
+          typeof parsed.data !== "object" ||
+          !Number.isFinite(parsed.cachedAt)
+        ) {
+          sessionStorage.removeItem(clinicCacheKey);
+          return null;
+        }
+
+        return parsed;
+      } catch (error) {
+        console.warn("Unable to read clinic cache:", error);
+        return null;
+      }
+    }
+
+    async function fetchClinic() {
+      if (cancelled || inFlight) return;
+
+      inFlight = true;
+
+      try {
+        const response = await fetch(`/api/clinics/${clinicId}`, {
           method: "GET",
           cache: "no-store",
         });
 
+        if (!response.ok) {
+          throw new Error("Failed to fetch clinic details");
+        }
+
         const data = await response.json();
 
-        if (!response.ok || !data.success) {
-          throw new Error(data.message || "Failed to fetch clinics");
+        if (!data.success || !data.clinic || typeof data.clinic !== "object") {
+          throw new Error(data.message || "Invalid clinic response");
         }
 
-        if (!Array.isArray(data.clinics)) {
-          throw new Error("Invalid clinics response");
-        }
 
-        if (!cancelled) {
-          setClinics(data.clinics);
+        if (cancelled) return;
+
+        setClinic(data.clinic);
+        hasDisplayedData = true;
+        setClinicError("");
+
+        if (clinicCacheKey) {
+          try {
+            sessionStorage.setItem(
+              clinicCacheKey,
+              JSON.stringify({
+                data: data.clinic,
+                cachedAt: Date.now(),
+              })
+            );
+          } catch (error) {
+            console.warn("Unable to save clinic cache:", error);
+          }
         }
       } catch (error) {
-        if (!cancelled) {
+        console.error("Error fetching clinic:", error);
+
+        if (!cancelled && !hasDisplayedData) {
           setClinicError(
-            error.message || "Unable to load clinics"
+            error.message || "Unable to load clinic details"
           );
         }
       } finally {
+        inFlight = false;
+
         if (!cancelled) {
-          setLoadingClinics(false);
+          setLoadingClinic(false);
         }
       }
     }
 
-    fetchClinics();
+    const cached = readCache();
 
-    const refreshTimer = setInterval(fetchClinics, 20_000);
+    if (cached) {
+      setClinic(cached.data);
+      hasDisplayedData = true;
+      setLoadingClinic(false);
+    }
+
+    const cacheIsFresh =
+      cached &&
+      Date.now() - cached.cachedAt < CLINIC_CACHE_TTL;
+
+    if (!cacheIsFresh) {
+      fetchClinic();
+    }
+
+    const refreshTimer = setInterval(fetchClinic, 20_000);
 
     return () => {
       cancelled = true;
       clearInterval(refreshTimer);
     };
-  }, []);
+  }, [status, clinicId, clinicCacheKey]);
 
-  useEffect(() => {
-    try {
-      const savedLocation = localStorage.getItem("queueease-location");
 
-      if (!savedLocation) return;
+useEffect(() => {
+  try {
+    const savedLocation =
+      localStorage.getItem("Zeric-location") 
+ 
+ 
 
-      const parsed = JSON.parse(savedLocation);
+    if (!savedLocation) return;
 
-      if (parsed && typeof parsed === "object") {
-        setLocation(
+    const parsed = JSON.parse(savedLocation);
+ 
+    
+
+    if (parsed && typeof parsed === "object") {
+      setLocation(
+        parsed.name ||
+          parsed.locationName ||
+          parsed.address ||
+          parsed.location ||
           parsed.name ||
-            parsed.address ||
-            parsed.location ||
-            parsed.display_name ||
-            "Selected Location"
-        );
-      } else {
-        setLocation(String(savedLocation));
-      }
-    } catch {
-      const savedLocation = localStorage.getItem("queueease-location");
+          "Selected Location"
+      );
 
-      if (savedLocation) setLocation(savedLocation);
+      // Migrate the old key to the new key.
+      localStorage.setItem("Zeric-location", JSON.stringify(parsed));
+    } else {
+      setLocation(String(savedLocation));
     }
-  }, []);
+  } catch {
+    const savedLocation =
+      localStorage.getItem("Zeric-location")
 
+    if (savedLocation) {
+      setLocation(savedLocation);
+    }
+  }
+}, []);
+
+
+  
   useEffect(() => {
     const updateTime = () => setCurrentTime(new Date());
 
@@ -685,15 +807,7 @@ export default function ClinicDetailsPage() {
     };
   }, [selectedDoctor]);
 
-  const clinicId = Array.isArray(params.id) ? params.id[0] : params.id;
 
-  const clinic = useMemo(
-    () =>
-      clinics.find(
-        (item) => String(item.id) === String(clinicId)
-      ),
-    [clinics, clinicId]
-  );
 
   const userCoordinates = useMemo(() => {
     const latitude = Number(session?.user?.latitude);
@@ -711,62 +825,124 @@ export default function ClinicDetailsPage() {
     return { lat: latitude, lng: longitude };
   }, [session?.user?.latitude, session?.user?.longitude]);
 
-  const distance = useMemo(() => {
-    if (!clinic || !userCoordinates) return null;
 
-    if (clinic.lat == null || clinic.lng == null) return null;
+useEffect(() => {
+  if (
+    !clinic ||
+    !userCoordinates ||
+    clinic.lat == null ||
+    clinic.lng == null
+  ) {
+    setDistance(null);
+    setDistanceLoading(false);
+    return;
+  }
 
-    return calculateDistance(
-      userCoordinates.lat,
-      userCoordinates.lng,
-      clinic.lat,
-      clinic.lng
-    );
-  }, [clinic, userCoordinates]);
+  let cancelled = false;
+
+  async function fetchRoadDistance() {
+    setDistanceLoading(true);
+    setDistance(null);
+
+    try {
+      const result = await calculateDistance(
+        userCoordinates.lat,
+        userCoordinates.lng,
+        clinic.lat,
+        clinic.lng
+      );
+
+      if (!cancelled) {
+        setDistance(result);
+      }
+    } catch (error) {
+      console.error("Unable to calculate road distance:", error);
+
+      if (!cancelled) {
+        setDistance(null);
+      }
+    } finally {
+      if (!cancelled) {
+        setDistanceLoading(false);
+      }
+    }
+  }
+
+  fetchRoadDistance();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  clinic?.lat,
+  clinic?.lng,
+  userCoordinates?.lat,
+  userCoordinates?.lng,
+]);
 
   const today = getTodayKey(currentTime);
   const todayDate = getLocalDateKey(currentTime);
 
   const doctors = useMemo(() => {
-    if (!clinic || !Array.isArray(clinic.doctors)) return [];
+    if (!clinic || !Array.isArray(clinic.doctors)) {
+      return [];
+    }
 
     return clinic.doctors.map((doctor) => {
+      const doctorId = getDoctorId(doctor);
+
       const normalizedDoctor = {
         ...doctor,
+        _id: doctorId,
+        id: doctorId,
+        name: doctor.name || "Doctor",
+        profileImage: doctor.profileImage || "",
         schedule: doctor.schedule || {},
         bookings: Array.isArray(doctor.bookings)
           ? doctor.bookings
           : [],
       };
 
-      const doctorStatus = getDoctorStatus(
+
+
+      
+      const todaySchedule = getScheduleForDay(
         normalizedDoctor.schedule,
+        today
+      );
+
+      const doctorStatus = getDoctorStatus(
+        {
+          [today]: todaySchedule,
+        },
         currentTime
       );
 
-      const todaySchedule = normalizedDoctor.schedule[today];
-
       const slotQueues =
-        todaySchedule?.active && Array.isArray(todaySchedule.slots)
-          ? todaySchedule.slots.map((slot) => ({
-              slot,
-              queueInfo: calculateSlotQueue(
-                normalizedDoctor,
+        todaySchedule?.active &&
+        Array.isArray(todaySchedule.slots)
+          ? todaySchedule.slots
+              .filter((slot) => slot.active !== false)
+              .map((slot) => ({
                 slot,
-                currentTime
-              ),
-            }))
+                queueInfo: calculateSlotQueue(
+                  normalizedDoctor,
+                  slot,
+                  currentTime
+                ),
+              }))
           : [];
 
       return {
         ...normalizedDoctor,
+        todaySchedule,
         status: doctorStatus,
         slotQueues,
       };
     });
-  }, [clinic, currentTime, today, todayDate]);
+  }, [clinic, currentTime, today]);
 
-  if (status === "loading" || loadingClinics) {
+  if (status === "loading" || loadingClinic) {
     return <LoadingScreen />;
   }
 
@@ -850,10 +1026,10 @@ export default function ClinicDetailsPage() {
             <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
+                  {clinic.rating && <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
                     <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
                     {clinic.rating ?? "N/A"}
-                  </span>
+                  </span>}
 
                   <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
                     {doctors.length}{" "}
@@ -882,21 +1058,31 @@ export default function ClinicDetailsPage() {
                     </div>
                   </div>
 
-                  {distance !== null && (
-                    <>
-                      <div className="hidden h-7 w-px bg-gray-200 sm:block" />
+                {(distanceLoading || distance) && (
+  <>
+    <div className="hidden h-7 w-px bg-gray-200 sm:block" />
 
-                      <div className="flex items-center gap-2">
-                        <Navigation className="h-4 w-4 text-indigo-500" />
+    <div className="flex flex-wrap items-center gap-2">
+      <Navigation className="h-4 w-4 text-indigo-500" />
 
-                        <span className="text-sm font-semibold text-gray-600">
-                          {distance < 1
-                            ? `${Math.round(distance * 1000)} m away`
-                            : `${distance.toFixed(1)} km away`}
-                        </span>
-                      </div>
-                    </>
-                  )}
+      {distanceLoading ? (
+        <span className="text-sm font-medium text-gray-400">
+          Calculating road distance...
+        </span>
+      ) : distance ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-gray-600">
+            {distance.distance < 1
+              ? `${Math.round(distance.distance * 1000)} m away`
+              : `${distance.distance.toFixed(1)} km away`}
+          </span>
+
+       
+        </div>
+      ) : null}
+    </div>
+  </>
+)}
                 </div>
               </div>
 
@@ -965,14 +1151,22 @@ export default function ClinicDetailsPage() {
             ) : (
               <div className="divide-y divide-gray-100">
                 {doctors.map((doctor) => {
-                  const todaySchedule = doctor.schedule?.[today];
+                  const todaySchedule = doctor.todaySchedule;
 
                   return (
                     <article key={doctor.id} className="p-5 sm:p-6">
                       <div className="flex flex-col gap-5">
                         <div className="flex items-start gap-3">
-                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-indigo-50">
-                            <Stethoscope className="h-5 w-5 text-indigo-600" />
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-indigo-50">
+                            {doctor.profileImage ? (
+                              <img
+                                src={doctor.profileImage}
+                                alt={doctor.name}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <Stethoscope className="h-5 w-5 text-indigo-600" />
+                            )}
                           </div>
 
                           <div className="min-w-0 flex-1">
@@ -1100,11 +1294,7 @@ export default function ClinicDetailsPage() {
                                           <Clock className="h-3.5 w-3.5" />
                                           {isFinished
                                             ? "Slot ended"
-                                            : queueInfo.expectedTurn
-                                              ? `Expected turn: ${formatTime(
-                                                  queueInfo.expectedTurn
-                                                )}`
-                                              : "Expected turn unavailable"}
+                                            : "Slot Open"}
                                         </span>
 
                                         {isCurrentActiveSlot &&
@@ -1170,54 +1360,64 @@ export default function ClinicDetailsPage() {
                       </p>
 
                       <div className="space-y-1">
-                        {Object.entries(doctor.schedule).map(
-                          ([day, schedule]) => {
-                            const isToday = day === today;
+                        {[
+                          "monday",
+                          "tuesday",
+                          "wednesday",
+                          "thursday",
+                          "friday",
+                          "saturday",
+                          "sunday",
+                        ].map((day) => {
+                          const schedule = getScheduleForDay(
+                            doctor.schedule,
+                            day
+                          );
+                          const isToday = day === today;
 
-                            return (
-                              <div
-                                key={day}
-                                className={`flex items-start gap-2 rounded-md px-2.5 py-1.5 sm:px-3 sm:py-2 ${
-                                  isToday ? "bg-indigo-50" : ""
+                          return (
+                            <div
+                              key={day}
+                              className={`flex items-start gap-2 rounded-md px-2.5 py-1.5 sm:px-3 sm:py-2 ${
+                                isToday ? "bg-indigo-50" : ""
+                              }`}
+                            >
+                              <span
+                                className={`w-14 shrink-0 text-[9px] capitalize sm:w-16 sm:text-[10px] ${
+                                  isToday
+                                    ? "font-bold text-indigo-700"
+                                    : "text-gray-600"
                                 }`}
                               >
-                                <span
-                                  className={`w-14 shrink-0 text-[9px] capitalize sm:w-16 sm:text-[10px] ${
-                                    isToday
-                                      ? "font-bold text-indigo-700"
-                                      : "text-gray-600"
-                                  }`}
-                                >
-                                  {day}
-                                </span>
+                                {day}
+                              </span>
 
-                                <div
-                                  className={`min-w-0 flex-1 text-right text-[9px] leading-4 sm:text-[10px] ${
-                                    schedule?.active
-                                      ? "font-medium text-gray-700"
-                                      : "text-gray-400"
-                                  }`}
-                                >
-                                  {schedule?.active &&
-                                  schedule?.slots?.length > 0 ? (
-                                    <div>
-                                      {schedule.slots.map((slot, index) => (
-                                        <div
-                                          key={`${slot.open}-${slot.close}-${index}`}
-                                        >
-                                          {formatSlotTime(slot.open)} -{" "}
-                                          {formatSlotTime(slot.close)}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <span>Closed Today</span>
-                                  )}
-                                </div>
+                              <div
+                                className={`min-w-0 flex-1 text-right text-[9px] leading-4 sm:text-[10px] ${
+                                  schedule?.active
+                                    ? "font-medium text-gray-700"
+                                    : "text-gray-400"
+                                }`}
+                              >
+                                {schedule?.active &&
+                                schedule?.slots?.length > 0 ? (
+                                  <div>
+                                    {schedule.slots.map((slot, index) => (
+                                      <div
+                                        key={`${slot.open}-${slot.close}-${index}`}
+                                      >
+                                        {formatSlotTime(slot.open)} -{" "}
+                                        {formatSlotTime(slot.close)}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span>Closed Today</span>
+                                )}
                               </div>
-                            );
-                          }
-                        )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   ))
@@ -1249,178 +1449,188 @@ export default function ClinicDetailsPage() {
 
       <GoUpButton />
 
-      {selectedDoctor && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) {
-              setSelectedDoctor(null);
-            }
-          }}
-        >
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="booking-modal-title"
-            className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white shadow-2xl"
-          >
-            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-600">
-                  Zeric
-                </p>
+      
+{selectedDoctor && (
+  <div
+    className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto overscroll-contain bg-black/50 p-3 backdrop-blur-sm sm:p-4"
+    onMouseDown={(event) => {
+      if (event.target === event.currentTarget) {
+        setSelectedDoctor(null);
+      }
+    }}
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="booking-modal-title"
+      className="relative my-auto flex max-h-[calc(100dvh-1.5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[90dvh]"
+    >
+      {/* Fixed header */}
+      <div className="z-10 flex shrink-0 items-center justify-between border-b border-gray-100 bg-white px-4 py-3 sm:px-5 sm:py-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-600">
+            Zeric
+          </p>
 
-                <h2
-                  id="booking-modal-title"
-                  className="mt-1 text-lg font-bold text-gray-900"
-                >
-                  Book Consultation
-                </h2>
+          <h2
+            id="booking-modal-title"
+            className="mt-1 text-lg font-bold text-gray-900"
+          >
+            Book Consultation
+          </h2>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setSelectedDoctor(null)}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition hover:bg-gray-200"
+          aria-label="Close booking dialog"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Independently scrollable content */}
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-4  scrollbar-thin sm:px-5 sm:py-5">
+        <div className="space-y-4">
+          <div className="rounded-xl bg-indigo-50 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white">
+                <Stethoscope className="h-5 w-5 text-indigo-600" />
               </div>
 
-              <button
-                type="button"
-                onClick={() => setSelectedDoctor(null)}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200"
-                aria-label="Close booking dialog"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div className="min-w-0">
+                <p className="break-words font-bold text-gray-900">
+                  {selectedDoctor.name}
+                </p>
+
+                <p className="mt-0.5 break-words text-xs text-gray-500">
+                  {selectedDoctor.specialization ||
+                    "General consultation"}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="divide-y divide-gray-100 rounded-xl border border-gray-200">
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <span className="text-sm text-gray-500">
+                Appointment
+              </span>
+              <span className="text-right text-sm font-bold text-gray-900">
+                Consultation
+              </span>
             </div>
 
-            <div className="space-y-4 p-5">
-              <div className="rounded-xl bg-indigo-50 p-4">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white">
-                    <Stethoscope className="h-5 w-5 text-indigo-600" />
-                  </div>
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <span className="text-sm text-gray-500">
+                Consultation Fee
+              </span>
+              <span className="text-sm font-semibold text-gray-900">
+                ₹{getDoctorFee(selectedDoctor.fee)}
+              </span>
+            </div>
 
-                  <div className="min-w-0">
-                    <p className="font-bold text-gray-900">
-                      {selectedDoctor.name}
-                    </p>
-
-                    <p className="mt-0.5 text-xs text-gray-500">
-                      {selectedDoctor.specialization ||
-                        "General consultation"}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="divide-y divide-gray-100 rounded-xl border border-gray-200">
-                <div className="flex items-center justify-between px-4 py-3">
-                  <span className="text-sm text-gray-500">
-                    Appointment
-                  </span>
-
-                  <span className="text-sm font-bold text-gray-900">
-                    Consultation
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between px-4 py-3">
-                  <span className="text-sm text-gray-500">
-                    Consultation Fee
-                  </span>
-
-                  <span className="text-sm font-semibold text-gray-900">
-                    ₹{getDoctorFee(selectedDoctor.fee)}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between px-4 py-3">
-                  <span className="text-sm text-gray-500">
-                    Booking Charge
-                  </span>
-
-                  <span className="text-sm font-semibold text-gray-900">
-                    ₹
-                    {getDoctorFee(
-                      selectedDoctor.bookingCharge,
-                      selectedDoctor.fee
-                    )}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between bg-indigo-50 px-4 py-3">
-                  <div>
-                    <p className="text-sm font-bold text-indigo-900">
-                      Pay Now
-                    </p>
-
-                    <p className="text-xs text-indigo-600">
-                      Booking charge only
-                    </p>
-                  </div>
-
-                  <span className="text-lg font-extrabold text-indigo-700">
-                    ₹
-                    {getDoctorFee(
-                      selectedDoctor.bookingCharge,
-                      selectedDoctor.fee
-                    )}
-                  </span>
-                </div>
-
-                <div className="flex items-start justify-between gap-4 px-4 py-3">
-                  <span className="text-[10px] text-gray-500">
-                    Today's timing
-                  </span>
-
-                  <span className="text-right text-xs font-semibold text-gray-700">
-                    {getScheduleText(
-                      selectedDoctor.schedule?.[today]
-                    )}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3 rounded-xl bg-gray-50 p-4">
-                <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-
-                <p className="text-xs leading-5 text-gray-600">
-                  Pay the booking charge to reserve your token. The
-                  consultation fee is separate and can be paid at the
-                  clinic.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  const doctorId = selectedDoctor.id;
-                  const currentClinicId = clinic.id;
-
-                  setSelectedDoctor(null);
-
-                  router.push(
-                    `/services/clinics/${encodeURIComponent(
-                      currentClinicId
-                    )}/book?doctor=${encodeURIComponent(doctorId)}`
-                  );
-                }}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-bold text-white transition hover:bg-indigo-700"
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                Continue Booking · ₹
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <span className="text-sm text-gray-500">
+                Booking Charge
+              </span>
+              <span className="text-sm font-semibold text-gray-900">
+                ₹
                 {getDoctorFee(
                   selectedDoctor.bookingCharge,
                   selectedDoctor.fee
                 )}
-              </button>
+              </span>
+            </div>
 
-              <button
-                type="button"
-                onClick={() => setSelectedDoctor(null)}
-                className="w-full py-1 text-sm font-medium text-gray-500 hover:text-gray-700"
-              >
-                Cancel
-              </button>
+            <div className="flex items-center justify-between gap-3 bg-indigo-50 px-4 py-3">
+              <div>
+                <p className="text-sm font-bold text-indigo-900">
+                  Pay Now
+                </p>
+                <p className="text-xs text-indigo-600">
+                  Booking charge only
+                </p>
+              </div>
+
+              <span className="text-lg font-extrabold text-indigo-700">
+                ₹
+                {getDoctorFee(
+                  selectedDoctor.bookingCharge,
+                  selectedDoctor.fee
+                )}
+              </span>
+            </div>
+
+            <div className="flex items-start justify-between gap-3 px-4 py-3">
+              <span className="text-xs text-gray-500">
+                Today's timing
+              </span>
+              <span className="max-w-[60%] text-right text-xs font-semibold text-gray-700">
+                {getScheduleText(
+                  selectedDoctor.schedule?.[today]
+                )}
+              </span>
             </div>
           </div>
+
+          <div className="flex items-start gap-3 rounded-xl bg-gray-50 p-4">
+            <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+
+            <p className="text-xs leading-5 text-gray-600">
+              Pay the booking charge to reserve your token. The
+              consultation fee is separate and can be paid at the
+              clinic.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const doctorId = getDoctorId(selectedDoctor);
+              const currentClinicId = String(
+                clinic._id || clinic.id || ""
+              );
+
+              if (!doctorId || !currentClinicId) {
+                console.error("Missing clinic ID or doctor ID");
+                return;
+              }
+
+              setSelectedDoctor(null);
+
+              router.push(
+                `/services/clinics/${encodeURIComponent(
+                  currentClinicId
+                )}/book?doctor=${encodeURIComponent(doctorId)}`
+              );
+            }}
+            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-3 text-center text-sm font-bold text-white transition hover:bg-indigo-700 active:scale-[0.99]"
+          >
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>
+              Continue Booking · ₹
+              {getDoctorFee(
+                selectedDoctor.bookingCharge,
+                selectedDoctor.fee
+              )}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSelectedDoctor(null)}
+            className="min-h-10 w-full py-2 text-sm font-medium text-gray-500 transition hover:text-gray-700"
+          >
+            Cancel
+          </button>
         </div>
-      )}
+      </div>
+    </div>
+  </div>
+)}
+
     </main>
   );
 }

@@ -1,231 +1,543 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import {
+  useParams,
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 import { useSession } from "next-auth/react";
+
 import Header from "@/components/Header";
 import GoUpButton from "@/components/GoUpButton";
+import LoadingScreen from "@/components/LoadingScreen";
+
 import {
-  AlertCircle,
   ArrowLeft,
   CalendarDays,
   CheckCircle2,
   Clock,
-  CreditCard,
   LoaderCircle,
   MapPin,
-  ShieldCheck,
+  Stethoscope,
   User,
+  AlertCircle,
+  ShieldCheck,
 } from "lucide-react";
 
-const EMERGENCY_FEE = 50;
-const ARRIVAL_OPTIONS = [5, 10, 15, 20, 30, 40, 60];
+const dayNames = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
 
-function getDayKey(date = new Date()) {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    timeZone: "Asia/Kolkata",
-  })
-    .format(date)
-    .toLowerCase();
+const CATEGORIES = {
+  clinic: "clinics",
+  saloon: "saloons",
+  "beauty-parlour": "parlour",
+  "diagnostic-centre": "diagnostic",
+};
+
+function getDoctorId(doctor) {
+  const value = doctor?._id ?? doctor?.id;
+
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+
+  if (typeof value === "object") {
+    if (typeof value.toHexString === "function") {
+      return value.toHexString();
+    }
+
+    if (typeof value.$oid === "string") {
+      return value.$oid;
+    }
+
+    return String(value);
+  }
+
+  return String(value);
 }
 
-function getTodayKey() {
-  return new Intl.DateTimeFormat("en-CA", {
+function getDoctorDaySchedule(doctor, dayKey) {
+  const schedule = doctor?.schedule;
+
+  if (!schedule || typeof schedule !== "object") {
+    return null;
+  }
+
+  const matchingKey = Object.keys(schedule).find(
+    (key) => key.toLowerCase() === dayKey.toLowerCase()
+  );
+
+  return matchingKey ? schedule[matchingKey] : null;
+}
+
+function getDateValue(date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function formatDate(dateString) {
+  if (!dateString) return "";
+
+  const [year, month, day] = dateString.split("-").map(Number);
+
+  return new Date(year, month - 1, day).toLocaleDateString(
+    "en-IN",
+    {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }
+  );
+}
+
+function parseSlotMinutes(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const match =
+    /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i.exec(
+      String(value).trim()
+    );
+
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const period = match[3]?.toUpperCase();
+
+  if (minute > 59) return null;
+
+  if (period) {
+    if (hour < 1 || hour > 12) return null;
+
+    if (period === "AM" && hour === 12) hour = 0;
+    if (period === "PM" && hour !== 12) hour += 12;
+  } else if (hour > 23) {
+    return null;
+  }
+
+  return hour * 60 + minute;
+}
+
+function formatTime(value) {
+  if (!value) return "";
+
+  const minutes = parseSlotMinutes(value);
+
+  if (minutes === null) return String(value);
+
+  const date = new Date(2000, 0, 1);
+  date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+
+  return date.toLocaleTimeString("en-IN", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function getIndiaDateTime() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date());
-}
-
-function getCurrentTimeInIndia() {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata",
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
-  }).format(new Date());
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+
+  const getPart = (type) =>
+    parts.find((part) => part.type === type)?.value;
+
+  return {
+    date: `${getPart("year")}-${getPart("month")}-${getPart("day")}`,
+    minutes:
+      Number(getPart("hour")) * 60 +
+      Number(getPart("minute")),
+  };
 }
 
-function toMinutes(value) {
-  if (!value || typeof value !== "string") return null;
+function normalizeDate(value) {
+  if (!value) return "";
 
-  const match = value.match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return null;
+  if (typeof value === "string") {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value;
+    }
 
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
+    const parsed = new Date(value);
 
-  if (hours > 23 || minutes > 59) return null;
-
-  return hours * 60 + minutes;
-}
-
-function isTimeWithinSlot(open, close, current) {
-  const openMinutes = toMinutes(open);
-  const closeMinutes = toMinutes(close);
-  const currentMinutes = toMinutes(current);
-
-  if (
-    openMinutes === null ||
-    closeMinutes === null ||
-    currentMinutes === null
-  ) {
-    return false;
+    if (!Number.isNaN(parsed.getTime())) {
+      return getDateValue(parsed);
+    }
   }
 
-  if (closeMinutes < openMinutes) {
-    return currentMinutes >= openMinutes || currentMinutes < closeMinutes;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return getDateValue(value);
   }
-
-  return currentMinutes >= openMinutes && currentMinutes < closeMinutes;
-}
-
-function getActiveSlot(doctor, now = new Date()) {
-  const dayKey = getDayKey(now);
-  const schedule = doctor?.schedule?.[dayKey];
-
-  if (!schedule?.active || !Array.isArray(schedule.slots)) {
-    return null;
-  }
-
-  const currentTime = getCurrentTimeInIndia();
-
-  return (
-    schedule.slots.find((slot) =>
-      isTimeWithinSlot(slot.open, slot.close, currentTime)
-    ) || null
-  );
-}
-
-function getClinicId(clinic) {
-  return String(clinic?.id ?? clinic?._id ?? "");
-}
-
-function getDoctorId(doctor) {
-  return String(doctor?.id ?? doctor?._id ?? "");
-}
-
-function normalizeGender(value) {
-  const gender = String(value || "").trim().toLowerCase();
-
-  if (["male", "m"].includes(gender)) return "male";
-  if (["female", "f"].includes(gender)) return "female";
-  if (["other", "others"].includes(gender)) return "other";
 
   return "";
 }
 
-export default function EmergencyBookingPage() {
-  const params = useParams();
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const { data: session, status: sessionStatus } = useSession();
+function getBookingSlot(booking) {
+  const slot = booking?.slot || {};
 
-  const clinicId = String(params?.id || "");
-  const doctorId = searchParams.get("doctor") || "";
+  return {
+    open:
+      slot.open ??
+      booking?.slotOpen ??
+      booking?.time ??
+      booking?.appointmentTime ??
+      "",
+    close:
+      slot.close ??
+      booking?.slotClose ??
+      "",
+  };
+}
+
+function getBookingClinicId(booking) {
+  return (
+    booking?.clinicId ??
+    booking?.businessId ??
+    booking?.clinic?.id ??
+    booking?.clinic?._id ??
+    null
+  );
+}
+
+function getBookingDoctorId(booking) {
+  const value =
+    booking?.doctorId ??
+    booking?.doctor?._id ??
+    booking?.doctor?.id ??
+    null;
+
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "object") {
+    if (typeof value.toHexString === "function") {
+      return value.toHexString();
+    }
+
+    if (typeof value.$oid === "string") {
+      return value.$oid;
+    }
+  }
+
+  return String(value);
+}
+
+function isBookingCountable(booking) {
+  const status = String(booking?.status || "").toLowerCase();
+
+  const paymentStatus = String(
+    booking?.paymentStatus || ""
+  ).toLowerCase();
+
+  if (
+    [
+      "cancelled",
+      "canceled",
+      "no-show",
+      "noshow",
+      "rejected",
+    ].includes(status)
+  ) {
+    return false;
+  }
+
+  if (
+    ["failed", "unpaid", "refunded"].includes(paymentStatus)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function getSlotCapacityInfo(
+  slot,
+  bookings,
+  appointmentDate,
+  clinicId,
+  doctorId
+) {
+  const capacity = Number(slot.capacity);
+
+  const bookedCount = bookings.filter((booking) => {
+    if (!isBookingCountable(booking)) return false;
+
+    const bookingClinicId = getBookingClinicId(booking);
+    const bookingDoctorId = getBookingDoctorId(booking);
+
+    const bookingDate = normalizeDate(
+      booking.date ??
+        booking.appointmentDate ??
+        booking.bookingDate
+    );
+
+    const bookingSlot = getBookingSlot(booking);
+
+    const bookingOpen = parseSlotMinutes(bookingSlot.open);
+    const bookingClose = parseSlotMinutes(bookingSlot.close);
+    const slotOpen = parseSlotMinutes(slot.open);
+    const slotClose = parseSlotMinutes(slot.close);
+
+    const sameClinic =
+      bookingClinicId !== null &&
+      String(bookingClinicId) === String(clinicId);
+
+    const sameDoctor =
+      bookingDoctorId !== null &&
+      String(bookingDoctorId) === String(doctorId);
+
+    const sameDate = bookingDate === appointmentDate;
+
+    const sameSlot =
+      bookingOpen !== null &&
+      bookingClose !== null &&
+      slotOpen !== null &&
+      slotClose !== null &&
+      bookingOpen === slotOpen &&
+      bookingClose === slotClose;
+
+    return sameClinic && sameDoctor && sameDate && sameSlot;
+  }).length;
+
+  const configured =
+    Number.isFinite(capacity) &&
+    Number.isInteger(capacity) &&
+    capacity > 0;
+
+  return {
+    capacity,
+    bookedCount,
+    remaining: configured
+      ? Math.max(0, capacity - bookedCount)
+      : 0,
+    configured,
+    isFull: !configured || bookedCount >= capacity,
+  };
+}
+
+function getAvailableDates(doctor) {
+  const dates = [];
+  const indiaDate = getIndiaDateTime().date;
+  const [year, month, day] = indiaDate.split("-").map(Number);
+
+  const today = new Date(year, month - 1, day);
+
+  for (let i = 0; i < 14; i++) {
+    const date = new Date(today);
+    date.setDate(today.getDate() + i);
+
+    const value = getDateValue(date);
+    const dayKey = dayNames[date.getDay()];
+    const doctorSchedule = getDoctorDaySchedule(doctor, dayKey);
+
+    const isAvailable =
+      doctorSchedule?.active === true &&
+      Array.isArray(doctorSchedule?.slots) &&
+      doctorSchedule.slots.length > 0;
+
+    dates.push({
+      value,
+      dayKey,
+      dayName: date.toLocaleDateString("en-IN", { weekday: "short" }),
+      dayNumber: date.getDate(),
+      monthName: date.toLocaleDateString("en-IN", { month: "short" }),
+      label: date.toLocaleDateString("en-IN", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+      }),
+      doctorSchedule,
+      isClosed: !isAvailable,
+    });
+  }
+
+  return dates;
+}
+
+function loadRazorpayScript() {
+  return new Promise((resolve) => {
+    if (window.Razorpay) {
+      resolve(true);
+      return;
+    }
+
+    const scriptUrl =
+      "https://checkout.razorpay.com/v1/checkout.js";
+
+    const existingScript = document.querySelector(
+      `script[src="${scriptUrl}"]`
+    );
+
+    if (existingScript) {
+      if (existingScript.dataset.loaded === "true") {
+        resolve(true);
+        return;
+      }
+
+      existingScript.addEventListener(
+        "load",
+        () => resolve(true),
+        { once: true }
+      );
+
+      existingScript.addEventListener(
+        "error",
+        () => resolve(false),
+        { once: true }
+      );
+
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = scriptUrl;
+    script.async = true;
+
+    script.onload = () => {
+      script.dataset.loaded = "true";
+      resolve(true);
+    };
+
+    script.onerror = () => resolve(false);
+
+    document.body.appendChild(script);
+  });
+}
+
+function extractBookings(data) {
+  if (Array.isArray(data?.bookings)) return data.bookings;
+  if (Array.isArray(data?.customers)) return data.customers;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.results)) return data.results;
+
+  return null;
+}
+
+export default function ClinicBookingPage() {
+  const params = useParams();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  const { data: session, status } = useSession();
+
+  const clinicId = Array.isArray(params.id)
+    ? params.id[0]
+    : params.id;
+
+  const category = (
+    searchParams.get("category") || "clinic"
+  )
+    .trim()
+    .toLowerCase();
+
+  const collectionName = CATEGORIES[category];
+  const doctorId = searchParams.get("doctor");
 
   const [clinic, setClinic] = useState(null);
-  const [doctor, setDoctor] = useState(null);
-  const [currentSlot, setCurrentSlot] = useState(null);
+  const [loadingClinic, setLoadingClinic] = useState(true);
+  const [clinicError, setClinicError] = useState("");
+
+  const [bookings, setBookings] = useState([]);
+  const [loadingBookings, setLoadingBookings] = useState(false);
+  const [bookingsError, setBookingsError] = useState("");
+  const [bookingRefreshKey, setBookingRefreshKey] = useState(0);
 
   const [patientName, setPatientName] = useState("");
   const [age, setAge] = useState("");
   const [gender, setGender] = useState("");
-  const [patientType, setPatientType] = useState("normal");
-  const [arrivalMinutes, setArrivalMinutes] = useState(15);
-
-  const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+
+  const [appointmentDate, setAppointmentDate] = useState("");
+  const [appointmentTime, setAppointmentTime] = useState("");
+
   const [error, setError] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
+  const [isPaying, setIsPaying] = useState(false);
 
-  const [currentTime, setCurrentTime] = useState(() => Date.now());
-
+  // Load clinic details and specified doctor
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(Date.now()), 15000);
-    return () => clearInterval(timer);
-  }, []);
+    let cancelled = false;
 
-  const loadClinic = useCallback(async () => {
-    if (!clinicId) return;
+    async function fetchClinic() {
+      if (!clinicId) return;
 
-    try {
-      setLoading(true);
-      setError("");
+      setLoadingClinic(true);
+      setClinicError("");
 
-      const response = await fetch("/api/clinics", {
-        cache: "no-store",
-      });
+      try {
+        const url = doctorId
+          ? `/api/${clinicId}?doctor=${encodeURIComponent(doctorId)}`
+          : `/api/${clinicId}`;
 
-      if (!response.ok) {
-        throw new Error("Unable to load clinics. Please try again.");
+        const response = await fetch(url, { cache: "no-store" });
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(
+            data.message || "Failed to load clinic details."
+          );
+        }
+
+        if (!cancelled) {
+          setClinic(data.clinic || null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setClinicError(
+            err.message || "Could not load clinic details."
+          );
+        }
+      } finally {
+        if (!cancelled) setLoadingClinic(false);
       }
-
-      const data = await response.json();
-
-      const clinics = Array.isArray(data)
-        ? data
-        : Array.isArray(data.clinics)
-          ? data.clinics
-          : [];
-
-      const foundClinic = clinics.find(
-        (item) => getClinicId(item) === clinicId
-      );
-
-      if (!foundClinic) {
-        throw new Error("Clinic not found.");
-      }
-
-      const doctors = Array.isArray(foundClinic.doctors)
-        ? foundClinic.doctors
-        : [];
-
-      const foundDoctor = doctors.find(
-        (item) => getDoctorId(item) === doctorId
-      );
-
-      if (!foundDoctor) {
-        throw new Error("Doctor not found. Please return to the clinic page.");
-      }
-
-      setClinic(foundClinic);
-      setDoctor(foundDoctor);
-    } catch (err) {
-      setError(err.message || "Unable to load clinic details.");
-    } finally {
-      setLoading(false);
     }
+
+    fetchClinic();
+
+    return () => {
+      cancelled = true;
+    };
   }, [clinicId, doctorId]);
 
+  // Prefill patient information
   useEffect(() => {
-    loadClinic();
-  }, [loadClinic]);
+    if (status === "loading") return;
 
-  useEffect(() => {
-    if (!doctor) {
-      setCurrentSlot(null);
-      return;
-    }
-
-    setCurrentSlot(getActiveSlot(doctor, new Date(currentTime)));
-  }, [doctor, currentTime]);
-
-  // Load the user's saved name, age and gender.
-  useEffect(() => {
-    if (sessionStatus === "loading") return;
-
-    if (!session?.user) {
+    if (status === "unauthenticated") {
       setProfileLoading(false);
+      router.replace("/login");
       return;
     }
 
     let cancelled = false;
 
-    async function loadPatientProfile() {
+    async function loadProfile() {
       setProfileLoading(true);
 
       try {
@@ -233,607 +545,1000 @@ export default function EmergencyBookingPage() {
           cache: "no-store",
         });
 
-        let profile = {};
+        const data = await response.json();
 
-        if (response.ok) {
-          const data = await response.json();
-          profile = data?.profile || data?.user || data || {};
+        if (!response.ok) {
+          throw new Error(
+            data.message || "Could not load your profile."
+          );
         }
 
         if (cancelled) return;
 
-        const savedName =
-          profile.name ||
-          profile.fullName ||
-          profile.patientName ||
-          session.user.name ||
-          "";
+        const profile = data.profile ?? data.user ?? data;
 
-        const savedAge =
-          profile.age ??
-          profile.patientAge ??
-          profile.dateOfBirthAge ??
-          "";
-
-        const savedGender = normalizeGender(
-          profile.gender ?? profile.patientGender
+        setPatientName(
+          (current) =>
+            current ||
+            profile.name ||
+            profile.fullName ||
+            session?.user?.name ||
+            ""
         );
 
-        setPatientName(savedName);
-        setAge(savedAge === "" ? "" : String(savedAge));
-
-        if (savedGender) {
-          setGender(savedGender);
+        if (
+          profile.age !== undefined &&
+          profile.age !== null &&
+          profile.age !== ""
+        ) {
+          setAge((current) =>
+            current === "" ? String(profile.age) : current
+          );
         }
-      } catch (err) {
-        console.error("Unable to load patient profile:", err);
 
+        if (profile.gender) {
+          setGender((current) => current || profile.gender);
+        }
+      } catch {
         if (!cancelled) {
-          setPatientName(session.user.name || "");
+          setPatientName(
+            (current) => current || session?.user?.name || ""
+          );
         }
       } finally {
-        if (!cancelled) {
-          setProfileLoading(false);
-        }
+        if (!cancelled) setProfileLoading(false);
       }
     }
 
-    loadPatientProfile();
+    loadProfile();
 
     return () => {
       cancelled = true;
     };
-  }, [session, sessionStatus]);
+  }, [status, session?.user?.name, router]);
 
-  const clinicName = clinic?.name || clinic?.clinicName || "Clinic";
-  const doctorName =
-    doctor?.name || doctor?.doctorName || "Doctor";
-  const address = clinic?.address || clinic?.location || "";
+  const doctor = useMemo(
+    () =>
+      clinic?.doctors?.find(
+        (item) => getDoctorId(item) === String(doctorId)
+      ) ??
+      clinic?.doctors?.[0] ??
+      null,
+    [clinic, doctorId]
+  );
 
-  const isLoggedIn = Boolean(session?.user);
+  const normalizedDoctorId = getDoctorId(doctor);
 
-  const canSubmit = useMemo(() => {
-    const parsedAge = Number(age);
-
-    return (
-      isLoggedIn &&
-      Boolean(patientName.trim()) &&
-      age !== "" &&
-      Number.isInteger(parsedAge) &&
-      parsedAge >= 0 &&
-      parsedAge <= 120 &&
-      Boolean(gender) &&
-      Boolean(currentSlot) &&
-      !submitting &&
-      !profileLoading
-    );
-  }, [
-    isLoggedIn,
-    patientName,
-    age,
-    gender,
-    currentSlot,
-    submitting,
-    profileLoading,
-  ]);
-
-  async function handleEmergencyBooking(event) {
-    event.preventDefault();
-    setError("");
-    setSuccessMessage("");
-
-    if (!isLoggedIn) {
-      router.push("/login");
+  useEffect(() => {
+    if (!appointmentDate || !clinicId || !normalizedDoctorId) {
+      setBookings([]);
+      setBookingsError("");
+      setLoadingBookings(false);
       return;
     }
 
-    if (!clinic || !doctor || !currentSlot) {
-      setError("The doctor is not currently in an active booking slot.");
-      return;
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function loadBookings() {
+      setLoadingBookings(true);
+      setBookingsError("");
+
+      try {
+        const query = new URLSearchParams({
+          clinicId: String(clinicId),
+          doctorId: normalizedDoctorId,
+          date: appointmentDate,
+          category,
+        });
+
+        const response = await fetch(
+          `/api/bookings?${query.toString()}`,
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || data.success === false) {
+          throw new Error(
+            data.message || "Failed to load bookings."
+          );
+        }
+
+        const records = extractBookings(data);
+
+        if (!records) {
+          throw new Error("Invalid bookings API response.");
+        }
+
+        if (!cancelled) {
+          setBookings(records);
+          setBookingsError("");
+        }
+      } catch (err) {
+        if (!cancelled && err.name !== "AbortError") {
+          setBookings([]);
+          setBookingsError(
+            err.message || "Could not load appointment bookings."
+          );
+        }
+      } finally {
+        if (!cancelled) setLoadingBookings(false);
+      }
+    }
+
+    loadBookings();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    clinicId,
+    normalizedDoctorId,
+    appointmentDate,
+    category,
+    bookingRefreshKey,
+  ]);
+
+  const availableDates = useMemo(
+    () => (doctor ? getAvailableDates(doctor) : []),
+    [doctor]
+  );
+
+  const selectedDoctorSchedule = useMemo(() => {
+    if (!doctor || !appointmentDate) return null;
+
+    const [year, month, day] = appointmentDate
+      .split("-")
+      .map(Number);
+
+    const selectedDate = new Date(year, month - 1, day);
+    const dayKey = dayNames[selectedDate.getDay()];
+
+    return getDoctorDaySchedule(doctor, dayKey);
+  }, [doctor, appointmentDate]);
+
+  const availableTimes = useMemo(() => {
+    if (
+      !appointmentDate ||
+      !selectedDoctorSchedule?.active ||
+      !Array.isArray(selectedDoctorSchedule?.slots)
+    ) {
+      return [];
+    }
+
+    const { date: today, minutes: currentMinutes } = getIndiaDateTime();
+    const isToday = appointmentDate === today;
+
+    return selectedDoctorSchedule.slots
+      .filter((slot) => {
+        const slotStart = parseSlotMinutes(slot.open);
+        const slotEnd = parseSlotMinutes(slot.close);
+
+        if (slotStart === null || slotEnd === null) return false;
+        if (slotEnd <= slotStart) return false;
+        if (!isToday) return true;
+
+        return slotEnd > currentMinutes;
+      })
+      .map((slot, index) => {
+        const capacityInfo = getSlotCapacityInfo(
+          slot,
+          bookings,
+          appointmentDate,
+          clinicId,
+          normalizedDoctorId
+        );
+
+        return {
+          id: `${slot.open}-${slot.close}-${index}`,
+          open: slot.open,
+          close: slot.close,
+          label: `${formatTime(slot.open)} - ${formatTime(slot.close)}`,
+          ...capacityInfo,
+        };
+      });
+  }, [
+    appointmentDate,
+    selectedDoctorSchedule,
+    bookings,
+    clinicId,
+    normalizedDoctorId,
+  ]);
+
+  useEffect(() => {
+    if (!appointmentTime) return;
+
+    const stillAvailable = availableTimes.some(
+      (slot) =>
+        slot.open === appointmentTime &&
+        slot.configured &&
+        !slot.isFull
+    );
+
+    if (!stillAvailable) {
+      setAppointmentTime("");
+    }
+  }, [availableTimes, appointmentTime]);
+
+  const selectedSlot = availableTimes.find(
+    (slot) => slot.open === appointmentTime
+  );
+
+  const isSlotUnavailable =
+    !appointmentDate ||
+    !appointmentTime ||
+    !selectedSlot ||
+    !selectedSlot.configured ||
+    selectedSlot.isFull;
+
+  const bookingCharge = Number(
+    doctor?.bookingCharge ?? doctor?.fee ?? 0
+  );
+
+  const isPageLoading =
+    status === "loading" || loadingClinic || profileLoading;
+
+  const handleSelectDate = (dateVal) => {
+    setAppointmentDate(dateVal);
+    setAppointmentTime("");
+    setError("");
+  };
+
+  const validateForm = () => {
+    setError("");
+
+    if (status !== "authenticated") {
+      setError("Please log in before booking an appointment.");
+      return false;
+    }
+
+    if (!collectionName) {
+      setError("Invalid business category.");
+      return false;
+    }
+
+    if (!clinic || !doctor || !normalizedDoctorId) {
+      setError("Clinic or doctor details could not be found.");
+      return false;
     }
 
     if (!patientName.trim()) {
-      setError("Please enter the patient's name.");
-      return;
+      setError("Please enter the patient name.");
+      return false;
     }
 
-    const parsedAge = Number(age);
+    if (age === "") {
+      setError("Please enter the patient age.");
+      return false;
+    }
+
+    const numericAge = Number(age);
 
     if (
-      age === "" ||
-      !Number.isInteger(parsedAge) ||
-      parsedAge < 0 ||
-      parsedAge > 120
+      !Number.isInteger(numericAge) ||
+      numericAge < 0 ||
+      numericAge > 120
     ) {
       setError("Please enter a valid age between 0 and 120.");
-      return;
+      return false;
     }
 
-    if (!["male", "female", "other"].includes(gender)) {
+    if (!gender) {
       setError("Please select the patient's gender.");
-      return;
+      return false;
     }
 
-    if (!window.Razorpay) {
-      setError("Payment checkout is not ready. Please refresh and try again.");
-      return;
+    if (!appointmentDate) {
+      setError("Please select an appointment date.");
+      return false;
     }
 
-    setSubmitting(true);
+    if (
+      !selectedDoctorSchedule?.active ||
+      !Array.isArray(selectedDoctorSchedule?.slots) ||
+      selectedDoctorSchedule.slots.length === 0
+    ) {
+      setError("The doctor is not available on the selected date.");
+      return false;
+    }
+
+    if (!appointmentTime) {
+      setError("Please select an appointment time.");
+      return false;
+    }
+
+    const currentSlot = availableTimes.find(
+      (slot) => slot.open === appointmentTime
+    );
+
+    if (!currentSlot) {
+      setError(
+        "This appointment slot is no longer available. Please select another slot."
+      );
+      return false;
+    }
+
+    if (!currentSlot.configured) {
+      setError(
+        "Capacity is not configured for this slot. Please contact the clinic."
+      );
+      return false;
+    }
+
+    if (currentSlot.isFull) {
+      setAppointmentTime("");
+      setError("This appointment slot is full. Please select another slot.");
+      return false;
+    }
+
+    if (bookingsError) {
+      setError(
+        "Patient availability could not be verified. Please retry."
+      );
+      return false;
+    }
+
+    if (!Number.isFinite(bookingCharge) || bookingCharge <= 0) {
+      setError("The booking charge is not configured for this doctor.");
+      return false;
+    }
+
+    return true;
+  };
+
+  const handlePayment = async () => {
+    if (isPaying || isPageLoading) return;
+    if (!validateForm()) return;
+
+    setIsPaying(true);
+    setError("");
 
     try {
+      const query = new URLSearchParams({
+        clinicId: String(clinicId),
+        doctorId: normalizedDoctorId,
+        date: appointmentDate,
+        category,
+      });
+
+      const bookingsResponse = await fetch(
+        `/api/bookings?${query.toString()}`,
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        }
+      );
+
+      const bookingsData = await bookingsResponse.json();
+
+      if (!bookingsResponse.ok || bookingsData.success === false) {
+        throw new Error(
+          bookingsData.message ||
+            "Unable to verify current patient availability."
+        );
+      }
+
+      const latestBookings = extractBookings(bookingsData);
+
+      if (!latestBookings) {
+        throw new Error("Invalid bookings API response.");
+      }
+
+      setBookings(latestBookings);
+
+      const slot = selectedDoctorSchedule?.slots?.find(
+        (item) => item.open === appointmentTime
+      );
+
+      if (!slot) {
+        throw new Error("This slot is no longer available.");
+      }
+
+      const latestCapacity = getSlotCapacityInfo(
+        slot,
+        latestBookings,
+        appointmentDate,
+        clinicId,
+        normalizedDoctorId
+      );
+
+      if (!latestCapacity.configured || latestCapacity.isFull) {
+        setAppointmentTime("");
+        throw new Error("This appointment slot is now full.");
+      }
+
+      const { date: today, minutes: currentMinutes } = getIndiaDateTime();
+      const slotEnd = parseSlotMinutes(slot.close);
+
+      if (
+        appointmentDate < today ||
+        (appointmentDate === today &&
+          slotEnd !== null &&
+          slotEnd <= currentMinutes)
+      ) {
+        setAppointmentTime("");
+        throw new Error("This appointment time has already passed.");
+      }
+
       const orderResponse = await fetch("/api/payment/create-order", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          clinicId,
-          doctorId,
+          category,
+          clinicId: String(clinicId),
+          doctorId: normalizedDoctorId,
           patientName: patientName.trim(),
-          age: parsedAge,
+          age: Number(age),
           gender,
-          patientType,
-          date: getTodayKey(),
-          time: currentSlot.open,
-          slot: {
-            open: currentSlot.open,
-            close: currentSlot.close,
-          },
-          priority: "emergency",
-          arrivalMinutes,
-          amount: EMERGENCY_FEE,
-          bookingType: "emergency",
+          date: appointmentDate,
+          time: appointmentTime,
+          slot: { open: slot.open, close: slot.close },
         }),
       });
 
       const orderData = await orderResponse.json();
 
-      if (!orderResponse.ok) {
+      if (!orderResponse.ok || orderData.success === false) {
         throw new Error(
-          orderData?.error ||
-            orderData?.message ||
-            "Unable to create the payment order."
+          orderData.message || "Failed to create payment order."
         );
       }
 
-      if (!orderData.order?.id && !orderData.orderId) {
-        throw new Error("The server did not return a valid payment order.");
+      const scriptLoaded = await loadRazorpayScript();
+
+      if (!scriptLoaded || !window.Razorpay) {
+        throw new Error("Razorpay Checkout failed to load.");
       }
 
-      const order = orderData.order || {
-        id: orderData.orderId,
+      const checkout = new window.Razorpay({
+        key: orderData.key,
         amount: orderData.amount,
         currency: orderData.currency || "INR",
-      };
-
-      const razorpayKey =
-        orderData.key || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-
-      if (!razorpayKey) {
-        throw new Error("Razorpay key is not configured.");
-      }
-
-      const paymentResult = await new Promise((resolve, reject) => {
-        const checkout = new window.Razorpay({
-          key: razorpayKey,
-          amount: order.amount,
-          currency: order.currency || "INR",
-          name: "Zeric",
-          description: "Emergency clinic booking",
-          order_id: order.id,
-          prefill: {
-            name: patientName.trim(),
-            email: session?.user?.email || "",
-            contact: session?.user?.phone || "",
-          },
-          theme: {
-            color: "#4f46e5",
-          },
-          modal: {
-            ondismiss: () => {
-              reject(new Error("Payment was cancelled."));
-            },
-          },
-          handler: (payment) => resolve(payment),
-        });
-
-        checkout.on("payment.failed", (response) => {
-          reject(
-            new Error(
-              response?.error?.description || "Payment failed. Please retry."
-            )
-          );
-        });
-
-        checkout.open();
-      });
-
-      const verifyResponse = await fetch("/api/payment/verify", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+        name: "Zeric",
+        description: `Appointment - ${doctor.name}`,
+        order_id: orderData.orderId,
+        prefill: {
+          name: patientName.trim(),
+          email: session?.user?.email || "",
         },
-        body: JSON.stringify({
-          razorpay_order_id: paymentResult.razorpay_order_id,
-          razorpay_payment_id: paymentResult.razorpay_payment_id,
-          razorpay_signature: paymentResult.razorpay_signature,
-        }),
+        notes: {
+          clinicId: String(clinicId),
+          doctorId: normalizedDoctorId,
+          appointmentDate,
+          category,
+        },
+        theme: { color: "#4f46e5" },
+        modal: {
+          ondismiss: () => setIsPaying(false),
+        },
+        handler: async (paymentResponse) => {
+          try {
+            const verifyResponse = await fetch("/api/payment/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(paymentResponse),
+            });
+
+            const verifyData = await verifyResponse.json();
+
+            if (!verifyResponse.ok || !verifyData.success) {
+              setError(
+                verifyData.message || "Payment verification failed."
+              );
+              setIsPaying(false);
+              return;
+            }
+
+            router.push("/my-bookings");
+          } catch {
+            setError(
+              "Payment verification failed. Please check My Bookings."
+            );
+            setIsPaying(false);
+          }
+        },
       });
 
-      const verifyData = await verifyResponse.json();
-
-      if (!verifyResponse.ok) {
-        throw new Error(
-          verifyData?.error ||
-            verifyData?.message ||
-            "Payment verification failed. Contact support before paying again."
+      checkout.on("payment.failed", (response) => {
+        setError(
+          response?.error?.description || "Payment failed."
         );
-      }
+        setIsPaying(false);
+      });
 
-      setSuccessMessage("Emergency booking payment verified successfully.");
-
-      if (verifyData.booking?._id || verifyData.booking?.bookingReference) {
-        router.replace("/my-bookings");
-      } else {
-        router.replace("/my-bookings");
-      }
+      checkout.open();
     } catch (err) {
-      setError(err.message || "Something went wrong. Please try again.");
-    } finally {
-      setSubmitting(false);
+      setError(err.message || "Something went wrong.");
+      setIsPaying(false);
     }
+  };
+
+  if (isPageLoading) {
+    return <LoadingScreen />;
+  }
+
+  if (status === "unauthenticated") {
+    return (
+      <main className="min-h-screen bg-slate-50/50">
+        <Header showBack={false} />
+        <div className="flex min-h-[65vh] items-center justify-center text-sm font-medium text-slate-500">
+          Redirecting to login...
+        </div>
+      </main>
+    );
+  }
+
+  if (clinicError || !clinic || !doctor) {
+    return (
+      <main className="min-h-screen bg-slate-50/50">
+        <Header showBack={false} />
+        <div className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center px-4">
+          <div className="w-full rounded-3xl border border-slate-200/80 bg-white p-8 text-center shadow-sm">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 text-rose-600">
+              <Stethoscope className="h-6 w-6" />
+            </div>
+            <h1 className="mt-4 text-xl font-bold text-slate-900">
+              {clinicError ? "Unable to Load Details" : "Doctor Not Found"}
+            </h1>
+            <p className="mt-2 text-sm text-slate-500">
+              {clinicError ||
+                "The requested doctor or clinic details could not be retrieved."}
+            </p>
+            <button
+              type="button"
+              onClick={() =>
+                router.push(
+                  `/${category === "clinic" ? "clinics" : collectionName}/${clinicId}`
+                )
+              }
+              className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:text-indigo-700"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Return to Clinic
+            </button>
+          </div>
+        </div>
+      </main>
+    );
   }
 
   return (
-    <>
-      <Header showBack />
+    <main className="min-h-screen bg-slate-50/60 pb-16">
+      <Header showBack={false} />
 
-      <main className="min-h-screen bg-slate-50 px-4 pb-24 pt-6 text-slate-900 sm:px-6">
-        <div className="mx-auto max-w-3xl">
-          <button
-            type="button"
-            onClick={() => router.back()}
-            className="mb-5 inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-          >
-            <ArrowLeft size={16} />
-            Back
-          </button>
+      <section className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
+        {/* Back Button */}
+        <button
+          type="button"
+          onClick={() => router.back()}
+          className="mb-6 inline-flex items-center gap-2 rounded-xl bg-white px-3.5 py-2 text-xs font-semibold text-slate-600 shadow-sm border border-slate-200/80 transition hover:bg-slate-50 hover:text-slate-900"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Back
+        </button>
 
-          <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-5">
-            <div className="flex items-start gap-3">
-              <div className="rounded-xl bg-red-100 p-2 text-red-600">
-                <AlertCircle size={23} />
+        <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-xl shadow-slate-200/40">
+          {/* Header Banner */}
+          <div className="border-b border-slate-100 bg-gradient-to-r from-indigo-50/80 via-white to-white p-6 sm:p-8">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-md shadow-indigo-200">
+                  <CalendarDays className="h-6 w-6" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
+                    Book Consultation
+                  </h1>
+                  <p className="text-xs font-medium text-slate-500">
+                    Patient: {session?.user?.email || session?.user?.name}
+                  </p>
+                </div>
               </div>
 
-              <div>
-                <h1 className="text-xl font-bold text-red-800">
-                  Emergency Booking
-                </h1>
-                <p className="mt-1 text-sm leading-6 text-red-700">
-                  Request priority handling for a patient who can arrive soon.
-                  This request does not replace emergency medical services.
-                </p>
-              </div>
+              <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200/60">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                Verified Doctor
+              </span>
             </div>
           </div>
 
-          {loading ? (
-            <div className="flex min-h-64 items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white">
-              <LoaderCircle className="animate-spin text-indigo-600" size={23} />
-              <span className="text-sm text-slate-600">
-                Loading clinic details...
-              </span>
-            </div>
-          ) : error && !clinic ? (
-            <div className="rounded-2xl border border-red-200 bg-white p-5">
-              <p className="text-sm text-red-700">{error}</p>
-              <button
-                type="button"
-                onClick={loadClinic}
-                className="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-              >
-                Try again
-              </button>
-            </div>
-          ) : (
-            <div className="grid gap-6 md:grid-cols-[1fr_0.85fr]">
-              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                <h2 className="text-lg font-bold">Patient details</h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Check the saved details and correct them if needed.
-                </p>
+          <div className="space-y-8 p-6 sm:p-8">
+            {/* Doctor Card */}
+            <div className="relative overflow-hidden rounded-2xl border border-indigo-100 bg-slate-50/50 p-5 sm:p-6 transition hover:border-indigo-200">
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-indigo-100/70 text-indigo-600">
+                  <Stethoscope className="h-6 w-6" />
+                </div>
 
-                {sessionStatus === "loading" || profileLoading ? (
-                  <div className="mt-5 flex items-center gap-2 text-sm text-slate-500">
-                    <LoaderCircle size={17} className="animate-spin" />
-                    Loading your saved profile...
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <h2 className="text-base font-bold text-slate-900 sm:text-lg">
+                      {doctor.name}
+                    </h2>
+                    <span className="text-xs font-medium text-slate-500">
+                      Fee:{" "}
+                      <strong className="text-indigo-600 text-sm font-bold">
+                        ₹{bookingCharge.toLocaleString("en-IN")}
+                      </strong>
+                    </span>
                   </div>
-                ) : !isLoggedIn ? (
-                  <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
-                    <p className="text-sm text-amber-800">
-                      Sign in to load your saved patient details and continue.
+
+                  <p className="text-xs font-semibold text-indigo-600">
+                    {doctor.specialization}
+                    {doctor.experience != null &&
+                      ` • ${doctor.experience} yrs exp`}
+                  </p>
+
+                  <div className="mt-3 space-y-1 text-xs text-slate-500">
+                    <p className="font-semibold text-slate-700">
+                      {clinic.name}
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => router.push("/login")}
-                      className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
-                    >
-                      Sign in
-                    </button>
+                    <p className="flex items-start gap-1 text-slate-500">
+                      <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                      {clinic.address}
+                    </p>
                   </div>
-                ) : (
-                  <form
-                    id="emergency-booking-form"
-                    onSubmit={handleEmergencyBooking}
-                    className="mt-5 space-y-4"
+
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 border border-slate-200/60">
+                      <Clock className="h-3 w-3 text-indigo-500" />
+                      {doctor.duration || 30} mins
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 border border-slate-200/60">
+                      <User className="h-3 w-3 text-indigo-500" />
+                      In-clinic
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Patient Form */}
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-bold tracking-tight text-slate-900 uppercase text-slate-400">
+                  1. Patient Details
+                </h3>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="sm:col-span-2">
+                  <label
+                    htmlFor="patientName"
+                    className="mb-1.5 block text-xs font-bold text-slate-700"
                   >
-                    <div>
-                      <label
-                        htmlFor="patientName"
-                        className="mb-1.5 block text-sm font-semibold text-slate-700"
+                    Patient Name
+                  </label>
+                  <input
+                    id="patientName"
+                    type="text"
+                    value={patientName}
+                    onChange={(e) => {
+                      setPatientName(e.target.value);
+                      setError("");
+                    }}
+                    placeholder="Full name"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="age"
+                    className="mb-1.5 block text-xs font-bold text-slate-700"
+                  >
+                    Age
+                  </label>
+                  <input
+                    id="age"
+                    type="number"
+                    min="0"
+                    max="120"
+                    value={age}
+                    onChange={(e) => {
+                      setAge(e.target.value);
+                      setError("");
+                    }}
+                    placeholder="Age in years"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="gender"
+                    className="mb-1.5 block text-xs font-bold text-slate-700"
+                  >
+                    Gender
+                  </label>
+                  <select
+                    id="gender"
+                    value={gender}
+                    onChange={(e) => {
+                      setGender(e.target.value);
+                      setError("");
+                    }}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
+                  >
+                    <option value="">Select gender</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Date Selection Grid */}
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-bold tracking-tight text-slate-900 uppercase text-slate-400">
+                  2. Select Date
+                </h3>
+              </div>
+
+              <div className="flex gap-2.5 overflow-x-auto pb-2 pt-1 scrollbar-thin">
+                {availableDates.map((date) => {
+                  const isSelected = appointmentDate === date.value;
+                  const isDisabled = date.isClosed;
+
+                  return (
+                    <button
+                      key={date.value}
+                      type="button"
+                      disabled={isDisabled}
+                      onClick={() => handleSelectDate(date.value)}
+                      className={`flex min-w-[76px] flex-col items-center justify-center rounded-2xl border px-3 py-3 text-center transition ${
+                        isDisabled
+                          ? "border-slate-100 bg-slate-50/80 text-slate-300 cursor-not-allowed"
+                          : isSelected
+                            ? "border-indigo-600 bg-indigo-600 text-white shadow-lg shadow-indigo-200 ring-2 ring-indigo-600 ring-offset-2"
+                            : "border-slate-200/80 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/30"
+                      }`}
+                    >
+                      <span
+                        className={`text-[10px] font-bold uppercase tracking-wider ${
+                          isSelected ? "text-indigo-100" : "text-slate-400"
+                        }`}
                       >
-                        Patient name
-                      </label>
-                      <div className="relative">
-                        <User
-                          size={17}
-                          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                        />
-                        <input
-                          id="patientName"
-                          name="patientName"
-                          type="text"
-                          autoComplete="name"
-                          value={patientName}
-                          onChange={(event) =>
-                            setPatientName(event.target.value)
-                          }
-                          placeholder="Enter patient's full name"
-                          required
-                          maxLength={100}
-                          className="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label
-                          htmlFor="age"
-                          className="mb-1.5 block text-sm font-semibold text-slate-700"
-                        >
-                          Age
-                        </label>
-                        <input
-                          id="age"
-                          name="age"
-                          type="number"
-                          inputMode="numeric"
-                          min="0"
-                          max="120"
-                          step="1"
-                          value={age}
-                          onChange={(event) => setAge(event.target.value)}
-                          placeholder="Age"
-                          required
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                        />
-                      </div>
-
-                      <div>
-                        <label
-                          htmlFor="gender"
-                          className="mb-1.5 block text-sm font-semibold text-slate-700"
-                        >
-                          Gender
-                        </label>
-                        <select
-                          id="gender"
-                          name="gender"
-                          value={gender}
-                          onChange={(event) => setGender(event.target.value)}
-                          required
-                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                        >
-                          <option value="">Select</option>
-                          <option value="male">Male</option>
-                          <option value="female">Female</option>
-                          <option value="other">Other</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label
-                        htmlFor="patientType"
-                        className="mb-1.5 block text-sm font-semibold text-slate-700"
+                        {date.dayName}
+                      </span>
+                      <span className="text-lg font-black my-0.5">
+                        {date.dayNumber}
+                      </span>
+                      <span
+                        className={`text-[10px] font-semibold ${
+                          isSelected ? "text-indigo-100" : "text-slate-500"
+                        }`}
                       >
-                        Booking for
-                      </label>
-                      <select
-                        id="patientType"
-                        name="patientType"
-                        value={patientType}
-                        onChange={(event) =>
-                          setPatientType(event.target.value)
-                        }
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                      >
-                        <option value="normal">Myself / Other adult</option>
-                        <option value="child">Child</option>
-                        <option value="elderly">Elderly person</option>
-                      </select>
-                    </div>
+                        {date.monthName}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-                    <div>
-                      <label className="mb-2 block text-sm font-semibold text-slate-700">
-                        Expected arrival time
-                      </label>
-                      <div className="grid grid-cols-4 gap-2">
-                        {ARRIVAL_OPTIONS.map((minutes) => (
-                          <button
-                            key={minutes}
-                            type="button"
-                            onClick={() => setArrivalMinutes(minutes)}
-                            className={`rounded-lg border px-2 py-2.5 text-sm font-semibold transition ${
-                              arrivalMinutes === minutes
-                                ? "border-indigo-600 bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600"
-                                : "border-slate-200 bg-white text-slate-600 hover:border-indigo-300"
+            {/* Time Slot Picker */}
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-bold tracking-tight text-slate-900 uppercase text-slate-400">
+                  3. Select Time Block
+                </h3>
+              </div>
+
+              {!appointmentDate ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
+                  <Clock className="mx-auto h-6 w-6 text-slate-300" />
+                  <p className="mt-2 text-xs font-semibold text-slate-500">
+                    Please select an appointment date above
+                  </p>
+                </div>
+              ) : !selectedDoctorSchedule?.active ||
+                !selectedDoctorSchedule?.slots?.length ? (
+                <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-5 text-center">
+                  <AlertCircle className="mx-auto h-5 w-5 text-rose-500" />
+                  <p className="mt-1 text-xs font-bold text-rose-700">
+                    Doctor Unavailable
+                  </p>
+                  <p className="text-[11px] text-rose-600">
+                    The doctor does not hold consultations on this day.
+                  </p>
+                </div>
+              ) : loadingBookings ? (
+                <div className="rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 text-center">
+                  <LoaderCircle className="mx-auto h-6 w-6 animate-spin text-indigo-600" />
+                  <p className="mt-2 text-xs font-semibold text-slate-500">
+                    Checking available slot capacities...
+                  </p>
+                </div>
+              ) : bookingsError ? (
+                <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-5 text-center">
+                  <p className="text-xs font-bold text-rose-700">
+                    Failed to fetch capacity counts
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setBookingRefreshKey((k) => k + 1)}
+                    className="mt-2 text-xs font-semibold text-rose-700 underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : availableTimes.length === 0 ? (
+                <div className="rounded-2xl border border-amber-200/80 bg-amber-50/50 p-5 text-center">
+                  <Clock className="mx-auto h-5 w-5 text-amber-500" />
+                  <p className="mt-1 text-xs font-bold text-amber-800">
+                    All Slots Closed
+                  </p>
+                  <p className="text-[11px] text-amber-700">
+                    There are no active consultation blocks remaining for this date.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {availableTimes.map((slot) => {
+                    const isSelected = appointmentTime === slot.open;
+                    const isDisabled = !slot.configured || slot.isFull;
+
+                    return (
+                      <button
+                        key={slot.id}
+                        type="button"
+                        disabled={isDisabled}
+                        onClick={() => {
+                          setAppointmentTime(slot.open);
+                          setError("");
+                        }}
+                        className={`group relative rounded-2xl border p-4 text-left transition ${
+                          isDisabled
+                            ? "border-slate-200/60 bg-slate-50 text-slate-400 cursor-not-allowed opacity-75"
+                            : isSelected
+                              ? "border-indigo-600 bg-indigo-600 text-white shadow-md shadow-indigo-100 ring-2 ring-indigo-600 ring-offset-1"
+                              : "border-slate-200 bg-white text-slate-800 hover:border-indigo-300 hover:bg-indigo-50/30"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-bold tracking-tight">
+                            {slot.label}
+                          </span>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              isDisabled
+                                ? "bg-rose-100 text-rose-700"
+                                : isSelected
+                                  ? "bg-white/20 text-white"
+                                  : slot.remaining <= 2
+                                    ? "bg-amber-100 text-amber-800"
+                                    : "bg-emerald-100 text-emerald-800"
                             }`}
                           >
-                            {minutes} min
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                            {!slot.configured
+                              ? "Unavailable"
+                              : slot.isFull
+                                ? "Full"
+                                : `${slot.remaining} left`}
+                          </span>
+                        </div>
 
-                    {error && (
-                      <div
-                        role="alert"
-                        className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"
-                      >
-                        <AlertCircle
-                          size={17}
-                          className="mt-0.5 shrink-0"
-                        />
-                        <span>{error}</span>
-                      </div>
-                    )}
-
-                    {successMessage && (
-                      <div className="flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-700">
-                        <CheckCircle2
-                          size={17}
-                          className="mt-0.5 shrink-0"
-                        />
-                        <span>{successMessage}</span>
-                      </div>
-                    )}
-
-                    <button
-                      type="submit"
-                      disabled={!canSubmit}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {submitting ? (
-                        <>
-                          <LoaderCircle size={18} className="animate-spin" />
-                          Processing payment...
-                        </>
-                      ) : (
-                        <>
-                          <CreditCard size={18} />
-                          Pay ₹{EMERGENCY_FEE} and request booking
-                        </>
-                      )}
-                    </button>
-
-                    <p className="text-center text-xs leading-5 text-slate-500">
-                      Your booking is not confirmed until payment verification
-                      and booking creation succeed.
-                    </p>
-                  </form>
-                )}
-              </section>
-
-              <aside className="space-y-4">
-                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h2 className="font-bold">Clinic details</h2>
-
-                  <div className="mt-4 space-y-4">
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                        Clinic
-                      </p>
-                      <p className="mt-1 font-semibold">{clinicName}</p>
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                        Doctor
-                      </p>
-                      <p className="mt-1 font-semibold">{doctorName}</p>
-                      {doctor?.specialization && (
-                        <p className="mt-1 text-sm text-slate-500">
-                          {doctor.specialization}
-                        </p>
-                      )}
-                    </div>
-
-                    {address && (
-                      <div className="flex items-start gap-2 text-sm text-slate-600">
-                        <MapPin
-                          size={17}
-                          className="mt-0.5 shrink-0 text-indigo-600"
-                        />
-                        <span>{address}</span>
-                      </div>
-                    )}
-                  </div>
-                </section>
-
-                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <h2 className="font-bold">Current slot</h2>
-
-                  {currentSlot ? (
-                    <div className="mt-4 rounded-xl border border-green-200 bg-green-50 p-4">
-                      <div className="flex items-center gap-2 text-sm font-bold text-green-800">
-                        <CheckCircle2 size={18} />
-                        Doctor is in an active slot
-                      </div>
-                      <div className="mt-3 flex items-center gap-2 text-sm text-green-800">
-                        <Clock size={16} />
-                        {currentSlot.open} – {currentSlot.close}
-                      </div>
-                      <div className="mt-2 flex items-center gap-2 text-sm text-green-800">
-                        <CalendarDays size={16} />
-                        Today, India time
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                      The doctor does not appear to have an active slot right
-                      now. Refresh the page or return to the clinic schedule.
-                    </div>
-                  )}
-                </section>
-
-                <section className="rounded-2xl border border-indigo-100 bg-indigo-50 p-5">
-                  <div className="flex items-center gap-2 font-bold text-indigo-900">
-                    <ShieldCheck size={19} />
-                    Payment summary
-                  </div>
-
-                  <div className="mt-4 flex items-center justify-between gap-3 text-sm">
-                    <span className="text-indigo-800">Emergency booking fee</span>
-                    <span className="font-bold text-indigo-950">
-                      ₹{EMERGENCY_FEE}
-                    </span>
-                  </div>
-
-                  <div className="my-3 border-t border-indigo-200" />
-
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-semibold text-indigo-900">Total</span>
-                    <span className="text-xl font-extrabold text-indigo-950">
-                      ₹{EMERGENCY_FEE}
-                    </span>
-                  </div>
-
-                  <p className="mt-3 text-xs leading-5 text-indigo-800">
-                    Emergency booking priority and availability must be
-                    validated by the server. This fee does not guarantee that
-                    the doctor can see you immediately.
-                  </p>
-                </section>
-              </aside>
+                        <div className="mt-2 flex items-center justify-between text-xs">
+                          <span
+                            className={`font-medium ${
+                              isSelected ? "text-indigo-100" : "text-slate-500"
+                            }`}
+                          >
+                            Capacity
+                          </span>
+                          <span
+                            className={`font-bold ${
+                              isSelected ? "text-white" : "text-slate-700"
+                            }`}
+                          >
+                            {slot.configured
+                              ? `${Math.min(slot.bookedCount, slot.capacity)}/${slot.capacity}`
+                              : "N/A"}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          )}
+
+            {/* Selected Booking Summary */}
+            {appointmentDate && appointmentTime && selectedSlot && (
+              <div className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50/80 to-white p-4 sm:p-5">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 text-indigo-600 shrink-0" />
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold uppercase tracking-wider text-indigo-600">
+                      Summary
+                    </p>
+                    <p className="text-sm font-bold text-slate-900">
+                      {formatDate(appointmentDate)} ({formatTime(appointmentTime)})
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Amount Payable:{" "}
+                      <strong className="text-slate-800 font-bold">
+                        ₹{bookingCharge.toLocaleString("en-IN")}
+                      </strong>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Validation Error Banner */}
+            {error && (
+              <div
+                role="alert"
+                className="flex items-center gap-2.5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700"
+              >
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* Submit & Pay Button */}
+            <button
+              type="button"
+              onClick={handlePayment}
+              disabled={
+                isPageLoading ||
+                isPaying ||
+                loadingBookings ||
+                !!bookingsError ||
+                isSlotUnavailable ||
+                !clinic ||
+                !doctor ||
+                !normalizedDoctorId ||
+                !patientName.trim() ||
+                age === "" ||
+                !Number.isInteger(Number(age)) ||
+                Number(age) < 0 ||
+                Number(age) > 120 ||
+                !gender ||
+                !Number.isFinite(bookingCharge) ||
+                bookingCharge <= 0
+              }
+              className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-indigo-600 px-6 py-4 text-sm font-bold text-white shadow-lg shadow-indigo-200 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+            >
+              {isPaying ? (
+                <>
+                  <LoaderCircle className="h-5 w-5 animate-spin" />
+                  Processing Payment...
+                </>
+              ) : loadingBookings ? (
+                <>
+                  <LoaderCircle className="h-5 w-5 animate-spin" />
+                  Checking Slot Availability...
+                </>
+              ) : isSlotUnavailable ? (
+                <>
+                  <Clock className="h-5 w-5" />
+                  {!appointmentDate || !appointmentTime
+                    ? "Select Date & Time"
+                    : "Slot Full / Unavailable"}
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="h-5 w-5" />
+                  Pay ₹{bookingCharge.toLocaleString("en-IN")} & Confirm
+                </>
+              )}
+            </button>
+          </div>
         </div>
-      </main>
+      </section>
 
       <GoUpButton />
-    </>
+    </main>
   );
 }

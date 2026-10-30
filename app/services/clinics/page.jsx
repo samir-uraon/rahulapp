@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import Header from "@/components/Header";
 import GoUpButton from "@/components/GoUpButton";
+import LoadingScreen from "@/components/LoadingScreen";
 
 import {
   MapPin,
@@ -16,31 +17,50 @@ import {
   Loader2,
 } from "lucide-react";
 
-function calculateDistance(lat1, lng1, lat2, lng2) {
+async function calculateDistance(lat1, lng1, lat2, lng2) {
+  const coordinates = [lat1, lng1, lat2, lng2].map(Number);
+
   if (
-    lat1 == null ||
-    lng1 == null ||
-    lat2 == null ||
-    lng2 == null
+    coordinates.some((value) => !Number.isFinite(value)) ||
+    Math.abs(coordinates[0]) > 90 ||
+    Math.abs(coordinates[2]) > 90 ||
+    Math.abs(coordinates[1]) > 180 ||
+    Math.abs(coordinates[3]) > 180
   ) {
     return null;
   }
 
-  const earthRadius = 6371;
+  const [latitude1, longitude1, latitude2, longitude2] =
+    coordinates;
 
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  try {
+    const url =
+      `https://router.project-osrm.org/route/v1/driving/` +
+      `${longitude1},${latitude1};${longitude2},${latitude2}` +
+      `?overview=false`;
 
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
+    const response = await fetch(url);
 
-  const c =
-    2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    if (!response.ok) {
+      throw new Error(`Routing request failed: ${response.status}`);
+    }
 
-  return earthRadius * c;
+    const data = await response.json();
+
+    if (data.code !== "Ok" || !data.routes?.length) {
+      return null;
+    }
+
+    const route = data.routes[0];
+
+    return {
+      distance: Number((route.distance / 1000).toFixed(2)),
+      duration: Math.ceil(route.duration / 60),
+    };
+  } catch (error) {
+    console.error("Road distance error:", error);
+    return null;
+  }
 }
 
 function formatTime(time) {
@@ -112,19 +132,290 @@ function getMinutes(time) {
   return hour * 60 + minute;
 }
 
+
+function getDoctorId(doctor) {
+  return String(doctor?._id || doctor?.id || "");
+}
+
 function getTodayKey(date = new Date()) {
   const days = [
-    "sunday",
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
   ];
 
   return days[date.getDay()];
 }
+
+function getIndiaDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function isDoctorOnHoliday(doctor, date = new Date()) {
+  const today = getIndiaDateKey(date);
+
+  const holidayDates = Array.isArray(doctor?.holidayDates)
+    ? doctor.holidayDates
+    : [];
+
+  // Only today's active holiday matters.
+  // Past holiday dates are automatically ignored.
+  return holidayDates.some(
+    (holiday) =>
+      typeof holiday === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(holiday) &&
+      holiday === today
+  );
+}
+
+function getDaySchedule(schedule, day) {
+  if (!schedule || !day) return null;
+
+  // Supports both Monday and monday in MongoDB.
+  return (
+    schedule[day] ||
+    schedule[day.toLowerCase()] ||
+    schedule[
+      day.charAt(0).toLowerCase() + day.slice(1)
+    ] ||
+    null
+  );
+}
+
+function getDoctorSlotQueues(doctor, date = new Date()) {
+  const today = getTodayKey(date);
+  
+  if (isDoctorOnHoliday(doctor, date)) {
+    return [];
+  }
+
+    const todaySchedule = getDaySchedule(doctor?.schedule, today);
+
+  if (
+    !todaySchedule?.active ||
+    !Array.isArray(todaySchedule.slots)
+  ) {
+    return [];
+  }
+
+  return todaySchedule.slots
+    .filter((slot) => slot?.active !== false)
+    .map((slot) => ({
+      slot,
+      queueInfo: calculateSlotQueue(doctor, slot, date),
+    }));
+}
+
+function getDoctorStatus(doctor, now = new Date()) {
+  const today = getTodayKey(now);
+  const todayKey = getIndiaDateKey(now);
+
+  // 1. Holiday check takes priority over the weekly schedule.
+  if (isDoctorOnHoliday(doctor, now)) {
+    return {
+      isOpen: false,
+      status: "On Holiday",
+      timeText: "Doctor on holiday today",
+      schedule: getDaySchedule(doctor?.schedule, today),
+      currentSlot: null,
+      nextSlot: null,
+      isHoliday: true,
+    };
+  }
+
+  // 2. Check the weekly schedule.
+  const todaySchedule = getDaySchedule(doctor?.schedule, today);
+
+  if (!todaySchedule?.active) {
+    return {
+      isOpen: false,
+      status: "Closed Today",
+      timeText: "Not available today",
+      schedule: todaySchedule,
+      currentSlot: null,
+      nextSlot: null,
+      isHoliday: false,
+    };
+  }
+
+  // 3. Get today's active sessions.
+  const slots = Array.isArray(todaySchedule.slots)
+    ? todaySchedule.slots
+        .filter((slot) => slot?.active !== false)
+        .map((slot) => ({
+          ...slot,
+          openMinutes: getMinutes(slot.open),
+          closeMinutes: getMinutes(slot.close),
+        }))
+        .filter(
+          (slot) =>
+            slot.openMinutes != null &&
+            slot.closeMinutes != null &&
+            slot.closeMinutes > slot.openMinutes
+        )
+        .sort((a, b) => a.openMinutes - b.openMinutes)
+    : [];
+
+  if (slots.length === 0) {
+    return {
+      isOpen: false,
+      status: "Closed Today",
+      timeText: "No active sessions today",
+      schedule: todaySchedule,
+      currentSlot: null,
+      nextSlot: null,
+      isHoliday: false,
+    };
+  }
+
+  // Use Indian local time for the session comparison.
+  const indiaTime = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(now);
+
+  const [hour, minute] = indiaTime.split(":").map(Number);
+  const currentMinutes = hour * 60 + minute;
+
+  // 4. Open only while an active session is running.
+  const currentSlot = slots.find(
+    (slot) =>
+      currentMinutes >= slot.openMinutes &&
+      currentMinutes < slot.closeMinutes
+  );
+
+  if (currentSlot) {
+    return {
+      isOpen: true,
+      status: "Open Now",
+      timeText: `Today: ${formatTime(currentSlot.open)} - ${formatTime(currentSlot.close)}`,
+      schedule: todaySchedule,
+      currentSlot,
+      nextSlot: null,
+      isHoliday: false,
+    };
+  }
+
+  // 5. Find the next session today.
+  const nextSlot =
+    slots.find((slot) => slot.openMinutes > currentMinutes) || null;
+
+  if (nextSlot) {
+    return {
+      isOpen: false,
+      status: "Closed Now",
+      timeText: `Opens today at ${formatTime(nextSlot.open)}`,
+      schedule: todaySchedule,
+      currentSlot: null,
+      nextSlot,
+      isHoliday: false,
+    };
+  }
+
+  return {
+    isOpen: false,
+    status: "Closed Today",
+    timeText: "All sessions have ended for today",
+    schedule: todaySchedule,
+    currentSlot: null,
+    nextSlot: null,
+    isHoliday: false,
+  };
+}
+
+function getClinicStatus(doctors, now = new Date()) {
+  const availableDoctors = (doctors || []).filter(
+    (doctor) => doctor?.isActive !== false
+  );
+
+  if (availableDoctors.length === 0) {
+    return {
+      isOpen: false,
+      status: "Closed Today",
+      timeText: "No doctors available",
+      openDoctors: [],
+      doctorStatuses: [],
+    };
+  }
+
+  const doctorStatuses = availableDoctors.map((doctor) => ({
+    doctor,
+    status: getDoctorStatus(doctor, now),
+  }));
+
+  const openDoctors = doctorStatuses
+    .filter((item) => item.status.isOpen)
+    .map((item) => item.doctor);
+
+  if (openDoctors.length > 0) {
+    return {
+      isOpen: true,
+      status: "Open Now",
+      timeText: `${openDoctors.length} ${
+        openDoctors.length === 1 ? "doctor" : "doctors"
+      } available now`,
+      openDoctors,
+      doctorStatuses,
+    };
+  }
+
+  const hasNonHolidayDoctor = doctorStatuses.some(
+    (item) => !item.status.isHoliday
+  );
+
+  const nextSlot = doctorStatuses
+    .map((item) => item.status.nextSlot)
+    .filter(Boolean)
+    .sort(
+      (a, b) => getMinutes(a.open) - getMinutes(b.open)
+    )[0];
+
+  if (nextSlot) {
+    return {
+      isOpen: false,
+      status: "Closed Now",
+      timeText: `Opens today at ${formatTime(nextSlot.open)}`,
+      openDoctors: [],
+      doctorStatuses,
+    };
+  }
+
+  const allOnHoliday = doctorStatuses.every(
+    (item) => item.status.isHoliday
+  );
+
+  return {
+    isOpen: false,
+    status: allOnHoliday
+      ? "Closed Today"
+      : "Closed Today",
+    timeText: allOnHoliday
+      ? "All doctors are on holiday today"
+      : hasNonHolidayDoctor
+        ? "All doctors have closed for today"
+        : "No doctor available today",
+    openDoctors: [],
+    doctorStatuses,
+  };
+}
+
 
 function getDateKey(date = new Date()) {
   const year = date.getFullYear();
@@ -388,14 +679,35 @@ function calculateSlotQueue(doctor, slot, currentDate) {
     };
   }
 
+  
   const calculatedIndex = Math.floor(
     (currentMinutes - queueStart) / duration
   );
+
+  // Never show a serving patient when there are no active bookings.
+  if (queue.length === 0) {
+    return {
+      ...emptyQueue,
+      isStarted: true,
+      servingIndex: -1,
+      peopleAhead: 0,
+      waiting: 0,
+      serving: null,
+      nextPatient: null,
+      estimatedWait: 0,
+    };
+  }
 
   if (calculatedIndex >= queue.length) {
     return {
       ...emptyQueue,
       isStarted: true,
+      servingIndex: -1,
+      peopleAhead: 0,
+      waiting: 0,
+      serving: null,
+      nextPatient: null,
+      estimatedWait: 0,
     };
   }
 
@@ -416,336 +728,10 @@ function calculateSlotQueue(doctor, slot, currentDate) {
     nextPatient: queue[servingIndex + 1] || null,
     estimatedWait: waiting * duration,
   };
+
 }
 
-function getDoctorSlotQueues(
-  doctor,
-  date = new Date()
-) {
-  const today =
-    getTodayKey(date);
 
-  const todaySchedule =
-    doctor?.schedule?.[today];
-
-  if (
-    !todaySchedule?.active ||
-    !Array.isArray(
-      todaySchedule.slots
-    )
-  ) {
-    return [];
-  }
-
-  return todaySchedule.slots.map(
-    (slot) => ({
-      slot,
-      queueInfo:
-        calculateSlotQueue(
-          doctor,
-          slot,
-          date
-        ),
-    })
-  );
-}
-
-function getDoctorStatus(
-  schedule,
-  now = new Date()
-) {
-  const today =
-    getTodayKey(now);
-
-  const todaySchedule =
-    schedule?.[today];
-
-  if (!todaySchedule?.active) {
-    return {
-      isOpen: false,
-      status: "Closed Today",
-      timeText: "Closed Today",
-      schedule:
-        todaySchedule || null,
-      currentSlot: null,
-      nextSlot: null,
-    };
-  }
-
-  const slots =
-    Array.isArray(
-      todaySchedule.slots
-    )
-      ? todaySchedule.slots
-      : [];
-
-  if (slots.length === 0) {
-    return {
-      isOpen: false,
-      status: "Closed Today",
-      timeText: "Closed Today",
-      schedule: todaySchedule,
-      currentSlot: null,
-      nextSlot: null,
-    };
-  }
-
-  const currentMinutes =
-    now.getHours() * 60 +
-    now.getMinutes();
-
-  const currentSlot =
-    slots.find((slot) => {
-      const openMinutes =
-        getMinutes(slot.open);
-
-      const closeMinutes =
-        getMinutes(slot.close);
-
-      if (
-        openMinutes == null ||
-        closeMinutes == null
-      ) {
-        return false;
-      }
-
-      return (
-        currentMinutes >=
-          openMinutes &&
-        currentMinutes <
-          closeMinutes
-      );
-    });
-
-  if (currentSlot) {
-    return {
-      isOpen: true,
-      status: "Open Now",
-      timeText: `Today: ${formatTime(
-        currentSlot.open
-      )} - ${formatTime(
-        currentSlot.close
-      )}`,
-      schedule: todaySchedule,
-      currentSlot,
-      nextSlot: null,
-    };
-  }
-
-  const upcomingSlots =
-    slots
-      .filter((slot) => {
-        const open =
-          getMinutes(slot.open);
-
-        return (
-          open != null &&
-          open > currentMinutes
-        );
-      })
-      .sort(
-        (a, b) =>
-          getMinutes(a.open) -
-          getMinutes(b.open)
-      );
-
-  if (upcomingSlots.length > 0) {
-    const nextSlot =
-      upcomingSlots[0];
-
-    return {
-      isOpen: false,
-      status: "Closed Now",
-      timeText: `Opens today at ${formatTime(
-        nextSlot.open
-      )}`,
-      schedule: todaySchedule,
-      currentSlot: null,
-      nextSlot,
-    };
-  }
-
-  return {
-    isOpen: false,
-    status: "Closed Now",
-    timeText: "Closed Now",
-    schedule: todaySchedule,
-    currentSlot: null,
-    nextSlot: null,
-  };
-}
-
-function getClinicStatus(
-  doctors,
-  now = new Date()
-) {
-  if (!doctors?.length) {
-    return {
-      isOpen: false,
-      status: "Closed Today",
-      timeText:
-        "No doctors available",
-      openDoctors: [],
-      doctorStatuses: [],
-    };
-  }
-
-  const doctorStatuses =
-    doctors.map((doctor) => ({
-      doctor,
-      status: getDoctorStatus(
-        doctor.schedule,
-        now
-      ),
-    }));
-
-  const openDoctors =
-    doctorStatuses.filter(
-      (item) =>
-        item.status.isOpen
-    );
-
-  if (openDoctors.length > 0) {
-    return {
-      isOpen: true,
-      status: "Open Now",
-      timeText: `${openDoctors.length} ${
-        openDoctors.length === 1
-          ? "doctor"
-          : "doctors"
-      } available now`,
-      openDoctors:
-        openDoctors.map(
-          (item) => item.doctor
-        ),
-      doctorStatuses,
-    };
-  }
-
-  const today =
-    getTodayKey(now);
-
-  const currentMinutes =
-    now.getHours() * 60 +
-    now.getMinutes();
-
-  const upcomingDoctors =
-    doctorStatuses
-      .map((item) => {
-        const schedule =
-          item.doctor.schedule?.[
-            today
-          ];
-
-        if (!schedule?.active) {
-          return null;
-        }
-
-        const slots =
-          Array.isArray(
-            schedule.slots
-          )
-            ? schedule.slots
-            : [];
-
-        const upcomingSlots =
-          slots
-            .filter((slot) => {
-              const open =
-                getMinutes(
-                  slot.open
-                );
-
-              return (
-                open != null &&
-                open >
-                  currentMinutes
-              );
-            })
-            .sort(
-              (a, b) =>
-                getMinutes(a.open) -
-                getMinutes(b.open)
-            );
-
-        if (
-          upcomingSlots.length === 0
-        ) {
-          return null;
-        }
-
-        return {
-          ...item,
-          nextSlot:
-            upcomingSlots[0],
-        };
-      })
-      .filter(Boolean)
-      .sort(
-        (a, b) =>
-          getMinutes(
-            a.nextSlot.open
-          ) -
-          getMinutes(
-            b.nextSlot.open
-          )
-      );
-
-  if (
-    upcomingDoctors.length > 0
-  ) {
-    const nextDoctor =
-      upcomingDoctors[0];
-
-    return {
-      isOpen: false,
-      status: "Closed Now",
-      timeText: `Opens today at ${formatTime(
-        nextDoctor.nextSlot.open
-      )}`,
-      openDoctors: [],
-      doctorStatuses,
-    };
-  }
-
-  const hasTodaySchedule =
-    doctorStatuses.some(
-      (item) => {
-        const schedule =
-          item.doctor.schedule?.[
-            today
-          ];
-
-        return (
-          schedule?.active &&
-          Array.isArray(
-            schedule.slots
-          ) &&
-          schedule.slots.length > 0
-        );
-      }
-    );
-
-  if (hasTodaySchedule) {
-    return {
-      isOpen: false,
-      status: "Closed Today",
-      timeText:
-        "All doctors have closed for today",
-      openDoctors: [],
-      doctorStatuses,
-    };
-  }
-
-  return {
-    isOpen: false,
-    status: "Closed Today",
-    timeText:
-      "No doctor available today",
-    openDoctors: [],
-    doctorStatuses: [],
-  };
-}
 
 export default function ClinicsPage() {
   const { data: session } =
@@ -764,91 +750,154 @@ export default function ClinicsPage() {
     useState([]);
 
   const [loading, setLoading] =
-    useState(true);
+    useState(false);
 
   const [error, setError] =
     useState(null);
 
-  useEffect(() => {
-    let cancelled = false;
+    const [filteredClinics, setFilteredClinics] = useState([]);
+const [distanceLoading, setDistanceLoading] = useState(false);
 
-    async function fetchClinics() {
-      try {
-        const res =
-          await fetch(
-            "/api/clinics",
-            {
-              method: "GET",
-              cache: "no-store",
-            }
-          );
+  const CLINICS_CACHE_TTL = 20_000; // 20 seconds
 
-        if (!res.ok) {
-          throw new Error(
-            "Failed to fetch clinics"
-          );
-        }
+let clinicsMemoryCache = new Map();
 
-        const data =
-          await res.json();
+function getClinicsCacheKey(sessionId) {
+  return `zeric-clinics-cache-${sessionId}`;
+}
 
-        if (
-          !cancelled &&
-          data.success
-        ) {
-          setClinicsData(
-            data.clinics || []
-          );
-          setError(null);
-        }
+const sessionId = session?.user?.id;
 
-        if (
-          !cancelled &&
-          !data.success
-        ) {
-          setError(
-            data.message ||
-              "Failed to fetch clinics"
-          );
-        }
-      } catch (err) {
-        console.error(
-          "Error fetching clinics:",
-          err
-        );
+const clinicsCacheKey = sessionId
+  ? getClinicsCacheKey(sessionId)
+  : null;
 
-        if (!cancelled) {
-          setError(
-            "An error occurred while loading clinics."
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
+useEffect(() => {
+  if (!clinicsCacheKey) {
+    // Don't reuse one user's cache for another user or a guest.
+    setClinicsData([]);
+    setLoading(false);
+    return;
+  }
+
+  let cancelled = false;
+  let inFlight = false;
+  let hasDisplayedData = false;
+
+  function readCache() {
+    const memoryCache = clinicsMemoryCache.get(clinicsCacheKey);
+
+    if (memoryCache) {
+      return memoryCache;
     }
 
+    try {
+      const saved = sessionStorage.getItem(clinicsCacheKey);
+
+      if (saved) {
+        const parsed = JSON.parse(saved);
+
+        if (
+          Array.isArray(parsed.data) &&
+          Number.isFinite(parsed.cachedAt)
+        ) {
+          clinicsMemoryCache.set(clinicsCacheKey, parsed);
+          return parsed;
+        }
+      }
+    } catch (error) {
+      console.warn("Unable to read clinic cache:", error);
+    }
+
+    return null;
+  }
+
+  async function fetchClinics() {
+    if (cancelled || inFlight) return;
+
+    inFlight = true;
+
+    try {
+      const response = await fetch("/api/clinics", {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch clinics");
+      }
+
+      const result = await response.json();
+   
+      
+
+      if (!result.success || !Array.isArray(result.clinics)) {
+        throw new Error("Invalid clinics response");
+      }
+
+     
+      
+
+      if (cancelled) return;
+
+      const cache = {
+        data: result.clinics,
+        cachedAt: Date.now(),
+      };
+
+      setClinicsData(cache.data);
+      clinicsMemoryCache.set(clinicsCacheKey, cache);
+      hasDisplayedData = true;
+      setError(null);
+
+      try {
+        sessionStorage.setItem(
+          clinicsCacheKey,
+          JSON.stringify(cache)
+        );
+      } catch (error) {
+        console.warn("Unable to save clinic cache:", error);
+      }
+    } catch (error) {
+      console.error("Error fetching clinics:", error);
+
+      if (!cancelled && !hasDisplayedData) {
+        setError("An error occurred while loading clinics.");
+      }
+    } finally {
+      inFlight = false;
+
+      if (!cancelled) setLoading(false);
+    }
+  }
+
+  const cached = readCache();
+
+  if (cached) {
+    setClinicsData(cached.data);
+    setLoading(false);
+    hasDisplayedData = true;
+  }
+
+  const cacheIsFresh =
+    cached &&
+    Date.now() - cached.cachedAt < CLINICS_CACHE_TTL;
+
+  if (!cacheIsFresh) {
     fetchClinics();
+  }
 
-    const refreshTimer =
-      setInterval(
-        fetchClinics,
-        20000
-      );
+  const timer = setInterval(fetchClinics, 20_000);
 
-    return () => {
-      cancelled = true;
-      clearInterval(
-        refreshTimer
-      );
-    };
-  }, []);
+  return () => {
+    cancelled = true;
+    clearInterval(timer);
+  };
+}, [clinicsCacheKey]);
 
   useEffect(() => {
     const savedLocation =
       localStorage.getItem(
-        "queueease-location"
+        "Zeric-location"
       );
 
     if (!savedLocation) return;
@@ -856,6 +905,7 @@ export default function ClinicsPage() {
     try {
       const parsed =
         JSON.parse(savedLocation);
+
 
       if (
         parsed &&
@@ -920,132 +970,152 @@ export default function ClinicsPage() {
       session?.user?.longitude,
     ]);
 
-  const filteredClinics =
-    useMemo(() => {
-      const searchText =
-        search
-          .trim()
-          .toLowerCase();
+useEffect(() => {
+  let cancelled = false;
 
-      return clinicsData
-        .map((clinic) => {
-          const distance =
+  async function loadFilteredClinics() {
+    const searchText = search.trim().toLowerCase();
+
+    // Filter clinics by clinic name or doctor name first.
+    const matchingClinics = clinicsData.filter((clinic) => {
+      if (!searchText) return true;
+
+      const clinicName = clinic.name?.toLowerCase() || "";
+
+      const doctorMatches = (clinic.doctors || []).some((doctor) =>
+        doctor.name?.toLowerCase().includes(searchText)
+      );
+
+      return clinicName.includes(searchText) || doctorMatches;
+    });
+
+    if (cancelled) return;
+
+    setDistanceLoading(Boolean(userCoordinates));
+
+    try {
+      const clinicsWithDetails = await Promise.all(
+        matchingClinics.map(async (clinic) => {
+          let roadDistance = null;
+
+          if (
             userCoordinates &&
             clinic.lat != null &&
             clinic.lng != null
-              ? calculateDistance(
-                  userCoordinates.lat,
-                  userCoordinates.lng,
-                  Number(clinic.lat),
-                  Number(clinic.lng)
-                )
-              : null;
+          ) {
+            roadDistance = await calculateDistance(
+              userCoordinates.lat,
+              userCoordinates.lng,
+              Number(clinic.lat),
+              Number(clinic.lng)
+            );
+          }
 
-          const doctorsWithStatus =
-            (
-              clinic.doctors ||
-              []
-            ).map((doctor) => {
-              const doctorStatus =
-                getDoctorStatus(
-                  doctor.schedule,
-                  currentTime
-                );
+          // Keep your existing doctor status and queue calculations.
+          const doctors = Array.isArray(clinic.doctors)
+            ? clinic.doctors.filter(
+                (doctor) => doctor && doctor.isActive !== false
+              )
+            : [];
 
-              const activeSlot =
-                doctorStatus.currentSlot;
-
-              const slotQueues =
-                getDoctorSlotQueues(
-                  doctor,
-                  currentTime
-                );
-
-              const activeQueueInfo =
-                activeSlot
-                  ? calculateSlotQueue(
-                      doctor,
-                      activeSlot,
-                      currentTime
-                    )
-                  : {
-                      total: 0,
-                      peopleAhead: 0,
-                      waiting: 0,
-                      serving: null,
-                      completed: 0,
-                      queue: [],
-                      servingIndex:
-                        -1,
-                      isStarted: false,
-                      isFinished: false,
-                      nextPatient: null,
-                      estimatedWait: 0,
-                    };
-
-              return {
-                ...doctor,
-                peopleAhead:
-                  activeQueueInfo.peopleAhead,
-                activeSlot,
-                activeQueueInfo,
-                slotQueues,
-                status:
-                  doctorStatus,
-              };
-            });
-
-          const clinicStatus =
-            getClinicStatus(
-              clinic.doctors,
+          const doctorsWithStatus = doctors.map((doctor) => {
+            const doctorStatus = getDoctorStatus(
+              doctor,
               currentTime
             );
 
+            const activeSlot = doctorStatus.currentSlot;
+
+            const slotQueues = getDoctorSlotQueues(
+              doctor,
+              currentTime
+            );
+
+            const activeQueueInfo = activeSlot
+              ? calculateSlotQueue(
+                  doctor,
+                  activeSlot,
+                  currentTime
+                )
+              : {
+                  total: 0,
+                  peopleAhead: 0,
+                  waiting: 0,
+                  serving: null,
+                  completed: 0,
+                  queue: [],
+                  servingIndex: -1,
+                  isStarted: false,
+                  isFinished: false,
+                  nextPatient: null,
+                  estimatedWait: 0,
+                };
+
+            return {
+              ...doctor,
+              id: getDoctorId(doctor),
+              peopleAhead: activeQueueInfo.peopleAhead,
+              activeSlot,
+              activeQueueInfo,
+              slotQueues,
+              status: doctorStatus,
+            };
+          });
+
+          const clinicStatus = getClinicStatus(
+            doctors,
+            currentTime
+          );
+
           return {
             ...clinic,
-            distance,
+
+            // Road distance, not straight-line distance.
+            distance: roadDistance?.distance ?? null,
+            duration: roadDistance?.duration ?? null,
+
             clinicStatus,
             doctorsWithStatus,
           };
         })
-        .filter((clinic) => {
-  if (!searchText) return true;
+      );
 
-  const clinicName = clinic.name?.toLowerCase() || "";
+      if (cancelled) return;
 
-  const doctorMatches = (clinic.doctors || []).some((doctor) =>
-    doctor.name?.toLowerCase().includes(searchText)
-  );
+      // Sort nearest clinics first using road distance.
+      clinicsWithDetails.sort((a, b) => {
+        if (a.distance == null && b.distance == null) return 0;
+        if (a.distance == null) return 1;
+        if (b.distance == null) return -1;
 
-  return clinicName.includes(searchText) || doctorMatches;
-})
-        .sort((a, b) => {
-          if (
-            a.distance === null &&
-            b.distance === null
-          ) {
-            return 0;
-          }
+        return a.distance - b.distance;
+      });
 
-          if (a.distance === null) {
-            return 1;
-          }
+      setFilteredClinics(clinicsWithDetails);
+    } catch (error) {
+      console.error("Error calculating clinic distances:", error);
 
-          if (b.distance === null) {
-            return -1;
-          }
+      if (!cancelled) {
+        setFilteredClinics([]);
+      }
+    } finally {
+      if (!cancelled) {
+        setDistanceLoading(false);
+      }
+    }
+  }
 
-          return (
-            a.distance -
-            b.distance
-          );
-        });
-    }, [
-      search,
-      userCoordinates,
-      currentTime,
-      clinicsData,
-    ]);
+  loadFilteredClinics();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  clinicsData,
+  search,
+  userCoordinates,
+  currentTime,
+]);
 
   const shortLocation =
     location
@@ -1165,24 +1235,7 @@ export default function ClinicsPage() {
           </div>
         </div>
 
-        {loading ? (
-          <div className="flex flex-col items-center justify-center rounded-2xl border border-gray-200 bg-white px-5 py-16 shadow-sm">
-            <Loader2
-              size={32}
-              className="animate-spin text-indigo-600"
-            />
-
-            <h3 className="mt-4 text-base font-semibold text-gray-900">
-              Loading clinics...
-            </h3>
-
-            <p className="mt-1 text-sm text-gray-500">
-              Please wait while we
-              retrieve the latest clinic
-              information.
-            </p>
-          </div>
-        ) : error ? (
+        {error ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-12 text-center shadow-sm">
             <h3 className="text-base font-semibold text-red-900">
               Failed to load clinics
@@ -1216,7 +1269,7 @@ export default function ClinicsPage() {
             {filteredClinics.map(
               (clinic) => (
                 <div
-                  key={clinic.id}
+                  key={clinic._id}
                   className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition-all duration-200 hover:border-indigo-200 hover:shadow-md sm:p-5"
                 >
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -1226,10 +1279,11 @@ export default function ClinicsPage() {
                           {clinic.name}
                         </h3>
 
-                        <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                      {clinic.rating &&  (<span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
                           ★{" "}
                           {clinic.rating}
-                        </span>
+                        </span>)
+                        }
 
                         <span
                           className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
@@ -1323,9 +1377,9 @@ export default function ClinicsPage() {
                         {clinic.doctorsWithStatus.map(
                           (doctor) => (
                             <div
-                              key={
-                                doctor.id
-                              }
+                            
+key={getDoctorId(doctor)}
+
                               className="rounded-xl border border-gray-100 bg-gray-50 p-3"
                             >
                               <div className="flex items-center justify-between gap-2">
@@ -1418,15 +1472,19 @@ export default function ClinicsPage() {
         } ahead`}
   </p>
 
-{isCurrentSlot && (
-  <Link
-    href={`/services/clinics/${clinic.id}/emergency?doctor=${encodeURIComponent(
-      doctor.id
-    )}`}
-    className="rounded-md bg-red-600 px-2.5 py-1.5 text-[10px] font-bold text-white transition hover:bg-red-700 active:scale-95"
-  >
-    Emergency Book
-  </Link>
+{isCurrentSlot &&
+  doctor.status.isOpen &&
+  !doctor.status.isHoliday && (
+
+<Link
+  href={`/services/clinics/${clinic._id}/emergency?doctor=${encodeURIComponent(
+    getDoctorId(doctor)
+  )}`}
+  className="rounded-md bg-red-600 relative -top-3 left-2 px-2.5 py-1.5 text-[10px] font-bold text-white transition hover:bg-red-700 active:scale-95"
+>
+  Emergency Book
+</Link>
+
 )}
 
   <span className="text-[10px] text-gray-400">
@@ -1484,7 +1542,7 @@ export default function ClinicsPage() {
 
                     <div className="w-full lg:w-auto lg:shrink-0 lg:self-center">
                       <Link
-                        href={`/services/clinics/${clinic.id}`}
+                        href={`/services/clinics/${clinic._id}`}
                         className="flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 px-5 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-indigo-700 hover:shadow-md active:scale-[0.98] lg:w-auto"
                       >
                         View Doctors

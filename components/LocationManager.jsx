@@ -9,7 +9,7 @@ export default function LocationManager() {
 
   useEffect(() => {
     const savedLocation =
-      localStorage.getItem("queueease-location");
+      localStorage.getItem("Zeric-location");
 
     if (savedLocation) {
       try {
@@ -21,7 +21,7 @@ export default function LocationManager() {
           return;
         }
       } catch {
-        localStorage.removeItem("queueease-location");
+        localStorage.removeItem("Zeric-location");
       }
     }
 
@@ -36,7 +36,7 @@ export default function LocationManager() {
     setOpen(false);
 
     localStorage.setItem(
-      "queueease-location",
+      "Zeric-location",
       JSON.stringify(data)
     );
   };

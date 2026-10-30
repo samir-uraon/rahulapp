@@ -4,16 +4,79 @@ import { getToken } from "next-auth/jwt";
 import clientPromise from "@/lib/mongodb";
 import Razorpay from "razorpay";
 import { createHmac, timingSafeEqual } from "crypto";
+import { ObjectId } from "mongodb";
 
-export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 export const revalidate = 0;
 
 const ACTIVE_STATUSES = ["waiting", "serving", "in-progress"];
 
-function parseTime(value) {
-  if (!value || typeof value !== "string") return null;
+const CATEGORY_COLLECTIONS = {
+  clinic: "clinics",
+  saloon: "saloons",
+  "beauty-parlour": "parlour",
+  "diagnostic-centre": "diagnostic",
+};
 
-  const match = value.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+function jsonResponse(body, status = 200) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+    },
+  });
+}
+
+function normalizeId(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function normalizeEmail(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function getDoctorId(value) {
+  if (typeof value === "string") return value.trim();
+
+  if (value instanceof ObjectId) return value.toString();
+
+  if (value && typeof value === "object") {
+    return normalizeId(value._id ?? value.id ?? "");
+  }
+
+  return "";
+}
+
+function getClinicIds(clinic) {
+  return [
+    normalizeId(clinic?.id),
+    normalizeId(clinic?._id),
+  ].filter(Boolean);
+}
+
+function getClinicName(clinic) {
+  return clinic?.name || clinic?.clinicName || "";
+}
+
+function getDoctorName(doctor) {
+  return (
+    doctor?.fullName ||
+    doctor?.name ||
+    doctor?.doctorName ||
+    ""
+  );
+}
+
+function parseTime(value) {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+
+  const match =
+    /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i.exec(
+      String(value).trim()
+    );
 
   if (!match) return null;
 
@@ -21,26 +84,21 @@ function parseTime(value) {
   const minute = Number(match[2]);
   const meridiem = match[3]?.toUpperCase();
 
-  if (minute > 59 || hour > 23) return null;
+  if (minute > 59) return null;
 
   if (meridiem) {
     if (hour < 1 || hour > 12) return null;
+
     hour %= 12;
-    if (meridiem === "PM") hour += 12;
+
+    if (meridiem === "PM") {
+      hour += 12;
+    }
+  } else if (hour > 23) {
+    return null;
   }
 
-  if (hour > 23) return null;
-
   return hour * 60 + minute;
-}
-
-function makeIndiaDate(dateString, minutes) {
-  const [year, month, day] = dateString.split("-").map(Number);
-
-  return new Date(
-    Date.UTC(year, month - 1, day, 0, minutes, 0) -
-      330 * 60 * 1000
-  );
 }
 
 function getIndiaDateString(date = new Date()) {
@@ -51,29 +109,33 @@ function getIndiaDateString(date = new Date()) {
     day: "2-digit",
   }).formatToParts(date);
 
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
+  const values = Object.fromEntries(
+    parts.map(({ type, value }) => [type, value])
+  );
 
-  return `${year}-${month}-${day}`;
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
-function getIndiaMinutes(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
+function isValidDateString(value) {
+  if (typeof value !== "string") return false;
 
-  const hour = Number(
-    parts.find((part) => part.type === "hour")?.value
-  );
-  const minute = Number(
-    parts.find((part) => part.type === "minute")?.value
-  );
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
 
-  return hour * 60 + minute;
+  if (!match) return false;
+
+  const [year, month, day] = [
+    Number(match[1]),
+    Number(match[2]),
+    Number(match[3]),
+  ];
+
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
 }
 
 function priorityRank(priority) {
@@ -87,15 +149,20 @@ function priorityRank(priority) {
 
 function sortQueue(items) {
   return [...items].sort((a, b) => {
-    const priorityDifference =
+    const difference =
       priorityRank(a.priority) - priorityRank(b.priority);
 
-    if (priorityDifference !== 0) return priorityDifference;
+    if (difference !== 0) return difference;
 
-    const sequenceA = Number(a.sequence) || Number.MAX_SAFE_INTEGER;
-    const sequenceB = Number(b.sequence) || Number.MAX_SAFE_INTEGER;
+    const sequenceA =
+      Number(a.sequence) || Number.MAX_SAFE_INTEGER;
 
-    if (sequenceA !== sequenceB) return sequenceA - sequenceB;
+    const sequenceB =
+      Number(b.sequence) || Number.MAX_SAFE_INTEGER;
+
+    if (sequenceA !== sequenceB) {
+      return sequenceA - sequenceB;
+    }
 
     return (
       new Date(a.createdAt || 0).getTime() -
@@ -104,7 +171,21 @@ function sortQueue(items) {
   });
 }
 
+function getScheduleDay(schedule, dayKey) {
+  if (!schedule || typeof schedule !== "object") return null;
+
+  const matchingKey = Object.keys(schedule).find(
+    (key) => key.toLowerCase() === dayKey.toLowerCase()
+  );
+
+  return matchingKey ? schedule[matchingKey] : null;
+}
+
 function getConfiguredSlot(doctor, dateString, selectedSlot) {
+  if (!isValidDateString(dateString) || !selectedSlot) {
+    return null;
+  }
+
   const [year, month, day] = dateString.split("-").map(Number);
 
   const dayNames = [
@@ -117,117 +198,147 @@ function getConfiguredSlot(doctor, dateString, selectedSlot) {
     "saturday",
   ];
 
-  // Use UTC noon to determine the appointment weekday consistently.
   const dayKey = dayNames[
-    new Date(Date.UTC(year, month - 1, day, 12)).getUTCDay()
+    new Date(
+      Date.UTC(year, month - 1, day, 12)
+    ).getUTCDay()
   ];
 
-  const scheduleDay = doctor?.schedule?.[dayKey];
+  const scheduleDay = getScheduleDay(
+    doctor?.schedule,
+    dayKey
+  );
 
-  if (scheduleDay?.active === false) return null;
+  if (!scheduleDay || scheduleDay.active !== true) {
+    return null;
+  }
 
-  const slots = scheduleDay?.slots || [];
+  if (!Array.isArray(scheduleDay.slots)) {
+    return null;
+  }
+
+  const requestedOpen = parseTime(selectedSlot.open);
+  const requestedClose = parseTime(selectedSlot.close);
+
+  if (requestedOpen === null || requestedClose === null) {
+    return null;
+  }
 
   return (
-    slots.find(
+    scheduleDay.slots.find(
       (item) =>
-        item.open === selectedSlot?.open &&
-        item.close === selectedSlot?.close
+        parseTime(item?.open) === requestedOpen &&
+        parseTime(item?.close) === requestedClose
     ) || null
   );
 }
 
-function getQueueStartTime(doctor, date, slot) {
-  const configuredSlot = getConfiguredSlot(doctor, date, slot);
+async function findClinic(collection, clinicId) {
+  const conditions = [
+    { id: clinicId },
+    { _id: clinicId },
+  ];
 
-  return (
-    parseTime(configuredSlot?.checkupStartTime) ??
-    parseTime(slot?.checkupStartTime) ??
-    parseTime(slot?.open)
-  );
-}
-
-/**
- * For today's appointment:
- * effective start = max(
- *   slot start,
- *   configured checkup start,
- *   current India time,
- *   earliest existing booking time
- * )
- *
- * For a future appointment:
- * effective start = max(slot start, configured checkup start)
- */
-function getEffectiveQueueStart({
-  appointmentDate,
-  slot,
-  configuredStartMinutes,
-  queue,
-  now,
-}) {
-  const slotStartMinutes = parseTime(slot?.open);
-
-  const starts = [
-    slotStartMinutes,
-    configuredStartMinutes,
-  ].filter((value) => value !== null && value !== undefined);
-
-  let effectiveStartMinutes = Math.max(...starts);
-
-  if (appointmentDate !== getIndiaDateString(now)) {
-    return effectiveStartMinutes;
+  if (ObjectId.isValid(clinicId)) {
+    conditions.push({
+      _id: new ObjectId(clinicId),
+    });
   }
 
-  effectiveStartMinutes = Math.max(
-    effectiveStartMinutes,
-    getIndiaMinutes(now)
-  );
-
-  const earliestBooking = [...queue]
-    .filter((item) => item.createdAt)
-    .sort(
-      (a, b) =>
-        new Date(a.createdAt).getTime() -
-        new Date(b.createdAt).getTime()
-    )[0];
-
-  if (earliestBooking) {
-    const createdAt = new Date(earliestBooking.createdAt);
-
-    if (
-      !Number.isNaN(createdAt.getTime()) &&
-      getIndiaDateString(createdAt) === appointmentDate
-    ) {
-      effectiveStartMinutes = Math.max(
-        effectiveStartMinutes,
-        getIndiaMinutes(createdAt)
-      );
-    }
-  }
-
-  return effectiveStartMinutes;
-}
-
-function jsonResponse(body, status = 200) {
-  return NextResponse.json(body, {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-    },
+  return collection.findOne({
+    $or: conditions,
   });
 }
 
+async function findDoctor(team, doctorId) {
+  if (!ObjectId.isValid(doctorId)) return null;
+
+  return team.findOne({
+    _id: new ObjectId(doctorId),
+    role: "doctor",
+    category: "clinic",
+    isActive: { $ne: false },
+  });
+}
+
+async function savePaymentRecord(
+  paymentRecords,
+  {
+    paymentId,
+    orderId,
+    bookingReference,
+    userId,
+    userEmail,
+    clinicId,
+    doctorId,
+    category,
+    collection,
+    amount,
+    currency,
+    bookingStatus,
+    now,
+  }
+) {
+  await paymentRecords.updateOne(
+    { paymentId },
+    {
+      $set: {
+        paymentId,
+        orderId,
+        bookingReference,
+        userId,
+        userEmail,
+        clinicId,
+        doctorId,
+        category,
+        collection,
+        amount,
+        currency,
+        status: "captured",
+        bookingStatus,
+        updatedAt: now,
+      },
+      $setOnInsert: {
+        createdAt: now,
+      },
+    },
+    { upsert: true }
+  );
+}
+
 export async function POST(request) {
-  let db;
+  let db = null;
   let lockedOrderId = null;
   let lockAcquired = false;
+
+  const releaseLock = async () => {
+    if (!db || !lockedOrderId || !lockAcquired) return;
+
+    await db.collection("paymentOrders").updateOne(
+      {
+        _id: lockedOrderId,
+        status: "verifying",
+      },
+      {
+        $set: {
+          status: "pending",
+          updatedAt: new Date(),
+        },
+        $unset: {
+          verificationStartedAt: "",
+        },
+      }
+    );
+
+    lockAcquired = false;
+  };
 
   try {
     const keyId = process.env.RAZORPAY_KEY_ID;
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
     const authSecret =
-      process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+      process.env.AUTH_SECRET ||
+      process.env.NEXTAUTH_SECRET;
 
     if (
       !keyId ||
@@ -244,6 +355,7 @@ export async function POST(request) {
       );
     }
 
+    // 1. Authenticate the user.
     const token = await getToken({
       req: request,
       secret: authSecret,
@@ -259,10 +371,10 @@ export async function POST(request) {
       );
     }
 
-    const userId = String(token.id || token.sub || "");
-    const userEmail = String(token.email || "").trim().toLowerCase();
+    const tokenUserId = normalizeId(token.id || token.sub);
+    const tokenEmail = normalizeEmail(token.email);
 
-    if (!userId && !userEmail) {
+    if (!tokenUserId && !tokenEmail) {
       return jsonResponse(
         {
           success: false,
@@ -272,11 +384,24 @@ export async function POST(request) {
       );
     }
 
-    const body = await request.json();
+    // 2. Validate the verification request.
+    let body;
 
-    const orderId = body.razorpay_order_id;
-    const paymentId = body.razorpay_payment_id;
-    const signature = body.razorpay_signature;
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse(
+        {
+          success: false,
+          message: "Invalid request body.",
+        },
+        400
+      );
+    }
+
+    const orderId = body?.razorpay_order_id;
+    const paymentId = body?.razorpay_payment_id;
+    const signature = body?.razorpay_signature;
 
     if (
       typeof orderId !== "string" ||
@@ -295,6 +420,7 @@ export async function POST(request) {
       );
     }
 
+    // 3. Verify the Razorpay signature.
     const expectedSignature = createHmac("sha256", keySecret)
       .update(`${orderId}|${paymentId}`)
       .digest();
@@ -314,15 +440,16 @@ export async function POST(request) {
       );
     }
 
+    // 4. Connect to MongoDB.
     const client = await clientPromise;
     db = client.db(process.env.MONGODB);
 
     const orders = db.collection("paymentOrders");
-    const bookingsCollection = db.collection("bookings");
-    const clinics = db.collection("clinics");
+    const bookings = db.collection("bookings");
+    const team = db.collection("team");
     const paymentRecords = db.collection("paymentRecord");
 
-    let paymentOrder = await orders.findOne({
+    const paymentOrder = await orders.findOne({
       razorpayOrderId: orderId,
     });
 
@@ -330,23 +457,22 @@ export async function POST(request) {
       return jsonResponse(
         {
           success: false,
-          message:
-            "Payment order not found. Ensure the create-order API saves orders in paymentOrders.",
+          message: "Payment order not found.",
         },
         404
       );
     }
 
-    const belongsToUser =
-      Boolean(userId) &&
-      String(paymentOrder.userId || "") === userId;
+    // 5. Verify order ownership.
+    const belongsById =
+      Boolean(tokenUserId) &&
+      normalizeId(paymentOrder.userId) === tokenUserId;
 
-    const emailMatches =
-      Boolean(userEmail) &&
-      String(paymentOrder.userEmail || "").trim().toLowerCase() ===
-        userEmail;
+    const belongsByEmail =
+      Boolean(tokenEmail) &&
+      normalizeEmail(paymentOrder.userEmail) === tokenEmail;
 
-    if (!belongsToUser && !emailMatches) {
+    if (!belongsById && !belongsByEmail) {
       return jsonResponse(
         {
           success: false,
@@ -356,6 +482,21 @@ export async function POST(request) {
       );
     }
 
+    const ownerId = normalizeId(paymentOrder.userId);
+    const ownerEmail = normalizeEmail(paymentOrder.userEmail);
+    const bookingReference = normalizeId(paymentOrder.reference);
+
+    if (!bookingReference) {
+      return jsonResponse(
+        {
+          success: false,
+          message: "Booking reference is missing.",
+        },
+        409
+      );
+    }
+
+    // 6. Verify payment status directly with Razorpay.
     const razorpay = new Razorpay({
       key_id: keyId,
       key_secret: keySecret,
@@ -372,31 +513,36 @@ export async function POST(request) {
       return jsonResponse(
         {
           success: false,
-          message: "Payment is not captured or does not match the order.",
+          message:
+            "Payment is not captured or does not match the order.",
         },
         400
       );
     }
 
-    const bookingReference = String(paymentOrder.reference || "");
+    const category = String(
+      paymentOrder.category || "clinic"
+    ).trim().toLowerCase();
 
-    if (!bookingReference) {
+    const collectionName =
+      CATEGORY_COLLECTIONS[category] || "clinics";
+
+    // This endpoint currently processes clinic doctor bookings.
+    if (category !== "clinic" || collectionName !== "clinics") {
       return jsonResponse(
         {
           success: false,
-          message: "Booking reference is missing.",
+          message:
+            "This verification endpoint only supports clinic bookings.",
         },
-        409
+        400
       );
     }
 
-    const ownerId = String(paymentOrder.userId || userId);
-    const ownerEmail = String(
-      paymentOrder.userEmail || userEmail
-    ).trim().toLowerCase();
+    const now = new Date();
 
-    // Idempotency check: do not create the same booking twice.
-    const existingBooking = await bookingsCollection.findOne({
+    // 7. Idempotency: do not create a duplicate booking.
+    const existingBooking = await bookings.findOne({
       $or: [
         { bookingReference },
         { razorpayOrderId: orderId },
@@ -405,48 +551,41 @@ export async function POST(request) {
     });
 
     if (existingBooking) {
+      const existingOwnerId = normalizeId(existingBooking.userId);
+      const existingOwnerEmail = normalizeEmail(
+        existingBooking.userEmail
+      );
+
       const sameOwner =
-        String(existingBooking.userId || "") === ownerId ||
-        Boolean(ownerEmail) &&
-          String(existingBooking.userEmail || "")
-            .trim()
-            .toLowerCase() === ownerEmail;
+        (ownerId && existingOwnerId === ownerId) ||
+        (ownerEmail && existingOwnerEmail === ownerEmail);
 
       if (!sameOwner) {
         return jsonResponse(
           {
             success: false,
-            message: "The existing booking belongs to another user.",
+            message:
+              "The existing booking belongs to another user.",
           },
           403
         );
       }
 
-      const now = new Date();
-
-      await paymentRecords.updateOne(
-        { paymentId },
-        {
-          $set: {
-            paymentId,
-            orderId,
-            bookingReference: existingBooking.bookingReference,
-            userId: ownerId,
-            userEmail: ownerEmail,
-            clinicId: existingBooking.clinicId,
-            doctorId: existingBooking.doctorId,
-            amount: payment.amount,
-            currency: payment.currency,
-            status: "captured",
-            bookingStatus: "booked",
-            updatedAt: now,
-          },
-          $setOnInsert: {
-            createdAt: now,
-          },
-        },
-        { upsert: true }
-      );
+      await savePaymentRecord(paymentRecords, {
+        paymentId,
+        orderId,
+        bookingReference: existingBooking.bookingReference,
+        userId: ownerId,
+        userEmail: ownerEmail,
+        clinicId: existingBooking.clinicId,
+        doctorId: existingBooking.doctorId,
+        category,
+        collection: collectionName,
+        amount: payment.amount,
+        currency: payment.currency,
+        bookingStatus: existingBooking.status || "booked",
+        now,
+      });
 
       await orders.updateOne(
         { _id: paymentOrder._id },
@@ -460,6 +599,9 @@ export async function POST(request) {
             paidAt: paymentOrder.paidAt || now,
             updatedAt: now,
           },
+          $unset: {
+            verificationStartedAt: "",
+          },
         }
       );
 
@@ -470,9 +612,10 @@ export async function POST(request) {
       });
     }
 
-    // Acquire an order-level verification lock.
-    const now = new Date();
-    const staleLockBefore = new Date(now.getTime() - 2 * 60 * 1000);
+    // 8. Acquire a verification lock for this payment order.
+    const staleLockBefore = new Date(
+      Date.now() - 2 * 60 * 1000
+    );
 
     const lockResult = await orders.updateOne(
       {
@@ -481,7 +624,9 @@ export async function POST(request) {
           { status: { $in: ["pending", "created"] } },
           {
             status: "verifying",
-            verificationStartedAt: { $lt: staleLockBefore },
+            verificationStartedAt: {
+              $lt: staleLockBefore,
+            },
           },
           {
             status: "verifying",
@@ -499,7 +644,7 @@ export async function POST(request) {
     );
 
     if (lockResult.modifiedCount !== 1) {
-      const retryBooking = await bookingsCollection.findOne({
+      const retryBooking = await bookings.findOne({
         $or: [
           { bookingReference },
           { razorpayOrderId: orderId },
@@ -507,7 +652,10 @@ export async function POST(request) {
         ],
       });
 
-      if (retryBooking) {
+      if (
+        retryBooking &&
+        normalizeId(retryBooking.userId) === ownerId
+      ) {
         return jsonResponse({
           success: true,
           alreadyProcessed: true,
@@ -519,7 +667,7 @@ export async function POST(request) {
         {
           success: false,
           message:
-            "This payment is already being processed or cannot be confirmed. Please retry shortly.",
+            "This payment is already being processed. Please retry shortly.",
         },
         409
       );
@@ -528,20 +676,23 @@ export async function POST(request) {
     lockedOrderId = paymentOrder._id;
     lockAcquired = true;
 
-    const clinicId = String(paymentOrder.clinicId || "");
-    const doctorId = String(paymentOrder.doctorId || "");
+    // 9. Read the saved appointment data.
+    const clinicId = normalizeId(paymentOrder.clinicId);
+    const doctorId = normalizeId(paymentOrder.doctorId);
     const patient = paymentOrder.patient || {};
     const appointment = paymentOrder.appointment || {};
     const slot = appointment.slot || {};
 
     if (
       !clinicId ||
-      !doctorId ||
-      !appointment.date ||
+      !ObjectId.isValid(doctorId) ||
+      !isValidDateString(appointment.date) ||
       !slot.open ||
       !slot.close ||
       !String(patient.name || "").trim()
     ) {
+      await releaseLock();
+
       return jsonResponse(
         {
           success: false,
@@ -551,27 +702,73 @@ export async function POST(request) {
       );
     }
 
-    const clinic = await clinics.findOne({
-      id: clinicId,
-      doctors: {
-        $elemMatch: { id: doctorId },
-      },
-    });
+    // 10. Find the clinic.
+    const clinics = db.collection(collectionName);
+    const clinic = await findClinic(clinics, clinicId);
 
-    const doctor = clinic?.doctors?.find(
-      (item) => String(item.id) === doctorId
-    );
+    if (!clinic) {
+      await releaseLock();
 
-    if (!clinic || !doctor) {
       return jsonResponse(
         {
           success: false,
-          message: "Clinic or doctor not found.",
+          message: "Clinic not found.",
         },
         404
       );
     }
 
+    // 11. Validate doctor membership in the clinic.
+    const clinicDoctorIds = Array.isArray(clinic.doctors)
+      ? clinic.doctors.map(getDoctorId)
+      : [];
+
+    if (!clinicDoctorIds.includes(doctorId)) {
+      await releaseLock();
+
+      return jsonResponse(
+        {
+          success: false,
+          message:
+            "This doctor is not assigned to the selected clinic.",
+        },
+        404
+      );
+    }
+
+    // 12. Fetch doctor by MongoDB ObjectId.
+    const doctor = await findDoctor(team, doctorId);
+
+    if (!doctor) {
+      await releaseLock();
+
+      return jsonResponse(
+        {
+          success: false,
+          message: "Doctor not found or inactive.",
+        },
+        404
+      );
+    }
+
+    const doctorClinicId = normalizeId(doctor.clinicId);
+
+    if (
+      doctorClinicId &&
+      !getClinicIds(clinic).includes(doctorClinicId)
+    ) {
+      await releaseLock();
+
+      return jsonResponse(
+        {
+          success: false,
+          message: "Doctor is not assigned to this clinic.",
+        },
+        409
+      );
+    }
+
+    // 13. Validate the slot against the doctor's current schedule.
     const configuredSlot = getConfiguredSlot(
       doctor,
       appointment.date,
@@ -579,46 +776,55 @@ export async function POST(request) {
     );
 
     if (!configuredSlot) {
+      console.error("Verification slot mismatch:", {
+        doctorId,
+        appointmentDate: appointment.date,
+        requestedSlot: slot,
+        savedSchedule: doctor.schedule,
+      });
+
+      await releaseLock();
+
       return jsonResponse(
         {
           success: false,
-          message: "The selected appointment slot is no longer available.",
+          message:
+            "The selected appointment slot is no longer available.",
         },
         409
       );
     }
 
-    const duration = Math.max(1, Number(doctor.duration) || 30);
-
-    const configuredStartMinutes = getQueueStartTime(
-      doctor,
-      appointment.date,
-      slot
+    const duration = Number(
+      doctor.duration ?? doctor.checkupDuration
     );
 
-    if (configuredStartMinutes === null) {
+    if (!Number.isFinite(duration) || duration <= 0) {
+      await releaseLock();
+
       return jsonResponse(
         {
           success: false,
-          message: "Could not determine the doctor's checkup start time.",
+          message:
+            "A valid consultation duration is not configured.",
         },
         409
       );
     }
 
-    // Only bookings stored in the bookings collection determine the queue.
-    const sameQueue = await bookingsCollection
-      .find({
-        clinicId,
-        doctorId,
-        date: appointment.date,
-        "slot.open": slot.open,
-        "slot.close": slot.close,
-        status: { $in: ACTIVE_STATUSES },
-      })
-      .toArray();
+    // 14. Load the active queue for this exact slot.
+    const queueFilter = {
+      clinicId,
+      doctorId,
+      date: appointment.date,
+      "slot.open": configuredSlot.open,
+      "slot.close": configuredSlot.close,
+      status: { $in: ACTIVE_STATUSES },
+    };
 
-    const queue = sortQueue(sameQueue);
+    const queue = sortQueue(
+      await bookings.find(queueFilter).toArray()
+    );
 
     const capacity = Number(configuredSlot.capacity);
 
@@ -627,30 +833,23 @@ export async function POST(request) {
       capacity > 0 &&
       queue.length >= capacity
     ) {
-      // The payment is already captured, so do not pretend it was refunded.
-      await paymentRecords.updateOne(
-        { paymentId },
-        {
-          $set: {
-            paymentId,
-            orderId,
-            bookingReference,
-            userId: ownerId,
-            userEmail: ownerEmail,
-            clinicId,
-            doctorId,
-            amount: payment.amount,
-            currency: payment.currency,
-            status: "captured",
-            bookingStatus: "capacity_conflict",
-            updatedAt: new Date(),
-          },
-          $setOnInsert: {
-            createdAt: new Date(),
-          },
-        },
-        { upsert: true }
-      );
+      const conflictTime = new Date();
+
+      await savePaymentRecord(paymentRecords, {
+        paymentId,
+        orderId,
+        bookingReference,
+        userId: ownerId,
+        userEmail: ownerEmail,
+        clinicId,
+        doctorId,
+        category,
+        collection: collectionName,
+        amount: payment.amount,
+        currency: payment.currency,
+        bookingStatus: "capacity_conflict",
+        now: conflictTime,
+      });
 
       await orders.updateOne(
         { _id: paymentOrder._id },
@@ -660,7 +859,9 @@ export async function POST(request) {
             paymentStatus: "captured",
             bookingStatus: "capacity_conflict",
             razorpayPaymentId: paymentId,
-            updatedAt: new Date(),
+            category,
+            collection: collectionName,
+            updatedAt: conflictTime,
           },
           $unset: {
             verificationStartedAt: "",
@@ -675,110 +876,112 @@ export async function POST(request) {
           success: false,
           paymentCaptured: true,
           message:
-            "Payment was captured, but this slot has reached capacity. Please contact support for a refund or another slot.",
+            "Payment was captured, but the slot has reached capacity. Please contact support for a refund or another appointment.",
         },
         409
       );
     }
 
+    // 15. Generate the next queue token.
     const sequence =
       Math.max(
         0,
         ...queue.map((item) => Number(item.sequence) || 0)
       ) + 1;
 
-    const effectiveStartMinutes = getEffectiveQueueStart({
-      appointmentDate: appointment.date,
-      slot,
-      configuredStartMinutes,
-      queue,
-      now: new Date(),
-    });
-
-    // Existing queue members each occupy one consultation duration.
-    const expectedTurnAt = makeIndiaDate(
-      appointment.date,
-      effectiveStartMinutes + queue.length * duration
-    );
-
     const bookingNow = new Date();
 
+    // IMPORTANT: expectedTurnAt is intentionally not calculated or stored.
     const booking = {
-  bookingReference,
-  token: `A${String(sequence).padStart(3, "0")}`,
-  sequence,
+      bookingReference,
 
-  userId: ownerId,
-  userEmail: ownerEmail,
+      token: `A${String(sequence).padStart(3, "0")}`,
+      sequence,
 
-  clinicId,
-  clinicName: clinic.name || clinic.clinicName || "",
-  address: clinic.address || "",
+      userId: ownerId,
+      userEmail: ownerEmail,
 
-  doctorId,
-  doctorName: doctor.name || doctor.doctorName || "",
-  duration,
+      clinicId,
+      clinicName: getClinicName(clinic),
+      address: clinic.address || "",
 
-  serviceName: "Consultation",
-  date: appointment.date,
-  slot,
+      category,
+      collection: collectionName,
 
-  patient: {
-    name: String(patient.name).trim(),
-    type: patient.type || "self",
-    age: patient.age ?? null,
-    gender: patient.gender || "",
-  },
+      doctorId,
+      doctorName: getDoctorName(doctor),
+      duration,
 
-  priority:
-    patient.type === "elderly" ? "elderly" : "normal",
+      serviceName: "Consultation",
+      date: appointment.date,
+      time: appointment.time || configuredSlot.open,
 
-  status: "waiting",
-  paymentStatus: "paid",
-
-  razorpayOrderId: orderId,
-  paymentId,
-  amount: payment.amount,
-  currency: payment.currency,
-
-  createdAt: bookingNow,
-};
-
-const bookingInsert = await bookingsCollection.insertOne(booking);
-
-const savedBooking = {
-  ...booking,
-  _id: bookingInsert.insertedId,
-};
-
-
-
-  
-
-    await paymentRecords.updateOne(
-      { paymentId },
-      {
-        $set: {
-          paymentId,
-          orderId,
-          bookingReference,
-          userId: ownerId,
-          userEmail: ownerEmail,
-          clinicId,
-          doctorId,
-          amount: payment.amount,
-          currency: payment.currency,
-          status: "captured",
-          bookingStatus: "booked",
-          updatedAt: bookingNow,
-        },
-        $setOnInsert: {
-          createdAt: bookingNow,
-        },
+      slot: {
+        open: configuredSlot.open,
+        close: configuredSlot.close,
+        ...(configuredSlot.checkupStartTime
+          ? {
+              checkupStartTime:
+                configuredSlot.checkupStartTime,
+            }
+          : slot.checkupStartTime
+            ? {
+                checkupStartTime: slot.checkupStartTime,
+              }
+            : {}),
       },
-      { upsert: true }
-    );
 
+      patient: {
+        name: String(patient.name).trim(),
+        phone: String(patient.phone || "").trim(),
+        type: patient.type || "self",
+        age: patient.age ?? null,
+        gender: patient.gender || "",
+      },
+
+      priority:
+        String(patient.type || "").toLowerCase() === "elderly"
+          ? "elderly"
+          : "normal",
+
+      status: "waiting",
+      paymentStatus: "paid",
+
+      razorpayOrderId: orderId,
+      paymentId,
+      amount: payment.amount,
+      currency: payment.currency,
+
+      createdAt: bookingNow,
+      updatedAt: bookingNow,
+    };
+
+    // 16. Insert the booking.
+    const bookingInsert = await bookings.insertOne(booking);
+
+    const savedBooking = {
+      ...booking,
+      _id: bookingInsert.insertedId,
+    };
+
+    // 17. Record the captured payment.
+    await savePaymentRecord(paymentRecords, {
+      paymentId,
+      orderId,
+      bookingReference,
+      userId: ownerId,
+      userEmail: ownerEmail,
+      clinicId,
+      doctorId,
+      category,
+      collection: collectionName,
+      amount: payment.amount,
+      currency: payment.currency,
+      bookingStatus: "booked",
+      now: bookingNow,
+    });
+
+    // 18. Mark the order as paid.
     await orders.updateOne(
       { _id: paymentOrder._id },
       {
@@ -788,6 +991,8 @@ const savedBooking = {
           bookingStatus: "booked",
           razorpayPaymentId: paymentId,
           bookingReference,
+          category,
+          collection: collectionName,
           paidAt: bookingNow,
           updatedAt: bookingNow,
         },
@@ -805,7 +1010,10 @@ const savedBooking = {
       booking: savedBooking,
     });
   } catch (error) {
-    console.error("Payment verification error:", error);
+    console.error(
+      "Payment verification error:",
+      error?.message || error
+    );
 
     if (db && lockedOrderId && lockAcquired) {
       try {
@@ -824,9 +1032,11 @@ const savedBooking = {
             },
           }
         );
+
+        lockAcquired = false;
       } catch (resetError) {
         console.error(
-          "Failed to reset payment verification lock:",
+          "Failed to reset verification lock:",
           resetError
         );
       }
@@ -835,7 +1045,8 @@ const savedBooking = {
     return jsonResponse(
       {
         success: false,
-        message: "Unable to verify payment or save the booking.",
+        message:
+          "Unable to verify payment or save the booking. If your payment was captured, retry verification or contact support.",
       },
       500
     );

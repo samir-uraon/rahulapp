@@ -1,10 +1,10 @@
-
+ 
 "use client";
 
 import { useEffect, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
-import { MapPin } from "lucide-react";
+import { MapPin, CalendarCheck } from "lucide-react";
 import toast from "react-hot-toast";
 import LocationPicker from "@/components/LocationPicker";
 import { useRouter } from "next/navigation";
@@ -21,7 +21,7 @@ export default function ProfilePage() {
   });
 
   const [location, setLocation] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
@@ -36,7 +36,7 @@ export default function ProfilePage() {
   }, [user]);
 
   useEffect(() => {
-    const savedLocation = localStorage.getItem("queueease-location");
+    const savedLocation = localStorage.getItem("Zeric-location");
 
     if (savedLocation) {
       try {
@@ -46,7 +46,7 @@ export default function ProfilePage() {
           setLocation(parsed.address);
         }
       } catch {
-        localStorage.removeItem("queueease-location");
+        localStorage.removeItem("Zeric-location");
       }
     }
   }, []);
@@ -98,7 +98,6 @@ export default function ProfilePage() {
       });
 
       setEditing(false);
-
       toast.success("Profile updated successfully.");
     } catch {
       toast.error("Something went wrong.");
@@ -123,9 +122,7 @@ export default function ProfilePage() {
   };
 
   if (status === "loading" || loading) {
-    return (
-      <LoadingScreen/>
-    );
+    return <LoadingScreen />;
   }
 
   if (status === "unauthenticated") {
@@ -151,7 +148,9 @@ export default function ProfilePage() {
     <main className="min-h-screen bg-gray-50">
       {/* HEADER */}
       <header className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex min-h-[64px] w-full max-w-3xl items-center px-4 sm:min-h-[72px] sm:px-6">
+        <div className="mx-auto flex min-h-[64px] w-full max-w-3xl items-center justify-between gap-3 px-4 sm:min-h-[72px] sm:px-6">
+
+          {/* LEFT SIDE */}
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <button
               type="button"
@@ -173,12 +172,22 @@ export default function ProfilePage() {
               </p>
             </div>
           </div>
+
+          {/* RIGHT SIDE - MY BOOKINGS */}
+          <Link
+            href="/my-bookings"
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-indigo-700 active:scale-[0.98] sm:px-4 sm:text-sm"
+          >
+            <CalendarCheck size={16} />
+            <span>My Bookings</span>
+          </Link>
         </div>
       </header>
 
       {/* PROFILE */}
       <section className="mx-auto w-full max-w-3xl px-3 py-5 sm:px-6 sm:py-8">
         <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+
           {/* PROFILE TOP */}
           <div className="border-b border-gray-100 px-4 py-5 sm:px-6 sm:py-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -195,7 +204,7 @@ export default function ProfilePage() {
                   </h2>
 
                   <p className="text-xs text-gray-500 sm:text-sm">
-                    QueueEase Customer
+                    Zeric Customer
                   </p>
                 </div>
               </div>
@@ -219,6 +228,7 @@ export default function ProfilePage() {
             </h3>
 
             <div className="space-y-5">
+
               {/* NAME */}
               <div>
                 <label className="text-xs font-medium uppercase tracking-wide text-gray-400">
@@ -373,4 +383,3 @@ export default function ProfilePage() {
     </main>
   );
 }
-

@@ -41,7 +41,7 @@ export default function RootLayout({ children }) {
           }}
         />
         <Providers>
-            <WebPushNotification />
+         
           {children}</Providers></body>
     </html>
   );

@@ -1,12 +1,22 @@
-
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import {
+  useParams,
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 import { useSession } from "next-auth/react";
+
 import Header from "@/components/Header";
 import GoUpButton from "@/components/GoUpButton";
 import LoadingScreen from "@/components/LoadingScreen";
+
 import {
   ArrowLeft,
   CalendarDays,
@@ -28,6 +38,60 @@ const dayNames = [
   "saturday",
 ];
 
+const CATEGORIES = {
+  clinic: "clinics",
+  saloon: "saloons",
+  "beauty-parlour": "parlour",
+  "diagnostic-centre": "diagnostic",
+};
+
+// Normalize a MongoDB doctor ID to a string.
+function getDoctorId(doctor) {
+  const value = doctor?._id ?? doctor?.id;
+
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+
+  if (typeof value === "object") {
+    if (typeof value.toHexString === "function") {
+      return value.toHexString();
+    }
+
+    if (typeof value.$oid === "string") {
+      return value.$oid;
+    }
+
+    return String(value);
+  }
+
+  return String(value);
+}
+
+// Handles schedule keys such as Monday or monday and checks doctor holidays.
+function getDoctorDaySchedule(doctor, dayKey, dateValue) {
+  // If doctor is on holiday on this date, deactivate schedule
+  if (
+    dateValue &&
+    Array.isArray(doctor?.holidayDates) &&
+    doctor.holidayDates.includes(dateValue)
+  ) {
+    return { active: false, slots: [], isHoliday: true };
+  }
+
+  const schedule = doctor?.schedule;
+
+  if (!schedule || typeof schedule !== "object") {
+    return null;
+  }
+
+  const matchingKey = Object.keys(schedule).find(
+    (key) => key.toLowerCase() === dayKey.toLowerCase()
+  );
+
+  return matchingKey ? schedule[matchingKey] : null;
+}
+
 function getDateValue(date) {
   return [
     date.getFullYear(),
@@ -41,12 +105,15 @@ function formatDate(dateString) {
 
   const [year, month, day] = dateString.split("-").map(Number);
 
-  return new Date(year, month - 1, day).toLocaleDateString("en-IN", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  return new Date(year, month - 1, day).toLocaleDateString(
+    "en-IN",
+    {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }
+  );
 }
 
 function parseSlotMinutes(value) {
@@ -79,15 +146,14 @@ function parseSlotMinutes(value) {
   return hour * 60 + minute;
 }
 
-function formatTime(time) {
-  if (!time) return "";
+function formatTime(value) {
+  if (!value) return "";
 
-  const minutes = parseSlotMinutes(time);
+  const minutes = parseSlotMinutes(value);
 
-  if (minutes === null) return String(time);
+  if (minutes === null) return String(value);
 
-  const date = new Date();
-
+  const date = new Date(2000, 0, 1);
   date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
 
   return date.toLocaleTimeString("en-IN", {
@@ -149,12 +215,47 @@ function getBookingSlot(booking) {
       slot.open ??
       booking?.slotOpen ??
       booking?.time ??
+      booking?.appointmentTime ??
       "",
     close:
       slot.close ??
       booking?.slotClose ??
       "",
   };
+}
+
+function getBookingClinicId(booking) {
+  return (
+    booking?.clinicId ??
+    booking?.businessId ??
+    booking?.clinic?.id ??
+    booking?.clinic?._id ??
+    null
+  );
+}
+
+function getBookingDoctorId(booking) {
+  const value =
+    booking?.doctorId ??
+    booking?.doctor?._id ??
+    booking?.doctor?.id ??
+    null;
+
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "object") {
+    if (typeof value.toHexString === "function") {
+      return value.toHexString();
+    }
+
+    if (typeof value.$oid === "string") {
+      return value.$oid;
+    }
+  }
+
+  return String(value);
 }
 
 function isBookingCountable(booking) {
@@ -187,25 +288,18 @@ function isBookingCountable(booking) {
 
 function getSlotCapacityInfo(
   slot,
-  doctor,
+  bookings,
   appointmentDate,
   clinicId,
   doctorId
 ) {
   const capacity = Number(slot.capacity);
 
-  const bookings = Array.isArray(doctor?.bookings)
-    ? doctor.bookings
-    : [];
-
   const bookedCount = bookings.filter((booking) => {
     if (!isBookingCountable(booking)) return false;
 
-    const bookingClinicId =
-      booking.clinicId ?? booking.clinic?.id;
-
-    const bookingDoctorId =
-      booking.doctorId ?? booking.doctor?.id;
+    const bookingClinicId = getBookingClinicId(booking);
+    const bookingDoctorId = getBookingDoctorId(booking);
 
     const bookingDate = normalizeDate(
       booking.date ??
@@ -215,24 +309,26 @@ function getSlotCapacityInfo(
 
     const bookingSlot = getBookingSlot(booking);
 
-    const sameClinic =
-      bookingClinicId == null ||
-      String(bookingClinicId) === String(clinicId);
-
-    const sameDoctor =
-      bookingDoctorId == null ||
-      String(bookingDoctorId) === String(doctorId);
-
-    const sameDate = bookingDate === appointmentDate;
-
     const bookingOpen = parseSlotMinutes(bookingSlot.open);
     const bookingClose = parseSlotMinutes(bookingSlot.close);
     const slotOpen = parseSlotMinutes(slot.open);
     const slotClose = parseSlotMinutes(slot.close);
 
+    const sameClinic =
+      bookingClinicId !== null &&
+      String(bookingClinicId) === String(clinicId);
+
+    const sameDoctor =
+      bookingDoctorId !== null &&
+      String(bookingDoctorId) === String(doctorId);
+
+    const sameDate = bookingDate === appointmentDate;
+
     const sameSlot =
       bookingOpen !== null &&
       bookingClose !== null &&
+      slotOpen !== null &&
+      slotClose !== null &&
       bookingOpen === slotOpen &&
       bookingClose === slotClose;
 
@@ -244,14 +340,12 @@ function getSlotCapacityInfo(
     Number.isInteger(capacity) &&
     capacity > 0;
 
-  const remaining = configured
-    ? Math.max(0, capacity - bookedCount)
-    : 0;
-
   return {
     capacity,
     bookedCount,
-    remaining,
+    remaining: configured
+      ? Math.max(0, capacity - bookedCount)
+      : 0,
     configured,
     isFull: !configured || bookedCount >= capacity,
   };
@@ -259,20 +353,23 @@ function getSlotCapacityInfo(
 
 function getAvailableDates(doctor) {
   const dates = [];
-  const today = new Date();
+  const indiaDate = getIndiaDateTime().date;
+  const [year, month, day] = indiaDate.split("-").map(Number);
 
-  today.setHours(0, 0, 0, 0);
+  const today = new Date(year, month - 1, day);
 
   for (let i = 0; i < 14; i++) {
     const date = new Date(today);
-
     date.setDate(today.getDate() + i);
 
     const value = getDateValue(date);
     const dayKey = dayNames[date.getDay()];
-    const doctorSchedule = doctor?.schedule?.[dayKey];
+    const doctorSchedule = getDoctorDaySchedule(doctor, dayKey, value);
+
+    const isHoliday = doctorSchedule?.isHoliday === true;
 
     const isAvailable =
+      !isHoliday &&
       doctorSchedule?.active === true &&
       Array.isArray(doctorSchedule?.slots) &&
       doctorSchedule.slots.length > 0;
@@ -286,6 +383,7 @@ function getAvailableDates(doctor) {
         month: "short",
       }),
       doctorSchedule,
+      isHoliday,
       isClosed: !isAvailable,
     });
   }
@@ -329,7 +427,6 @@ function loadRazorpayScript() {
     }
 
     const script = document.createElement("script");
-
     script.src = scriptUrl;
     script.async = true;
 
@@ -344,6 +441,15 @@ function loadRazorpayScript() {
   });
 }
 
+function extractBookings(data) {
+  if (Array.isArray(data?.bookings)) return data.bookings;
+  if (Array.isArray(data?.customers)) return data.customers;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.results)) return data.results;
+
+  return null;
+}
+
 export default function ClinicBookingPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -355,16 +461,28 @@ export default function ClinicBookingPage() {
     ? params.id[0]
     : params.id;
 
+  const category = (
+    searchParams.get("category") || "clinic"
+  )
+    .trim()
+    .toLowerCase();
+
+  const collectionName = CATEGORIES[category];
   const doctorId = searchParams.get("doctor");
 
-  const [clinics, setClinics] = useState([]);
-  const [loadingClinics, setLoadingClinics] = useState(true);
+  const [clinic, setClinic] = useState(null);
+  const [loadingClinic, setLoadingClinic] = useState(true);
   const [clinicError, setClinicError] = useState("");
 
-  const [patientName, setPatientName] = useState("");
+  const [bookings, setBookings] = useState([]);
+  const [loadingBookings, setLoadingBookings] = useState(false);
+  const [bookingsError, setBookingsError] = useState("");
+  const [refreshingBookings, setRefreshingBookings] = useState(false);
+  const [bookingRefreshKey, setBookingRefreshKey] = useState(0);
+
+  const [patientName, setPatientName] = useState(session?.user?.name);
   const [age, setAge] = useState("");
   const [gender, setGender] = useState("");
-  const [profileLoading, setProfileLoading] = useState(true);
 
   const [appointmentDate, setAppointmentDate] = useState("");
   const [appointmentTime, setAppointmentTime] = useState("");
@@ -372,15 +490,22 @@ export default function ClinicBookingPage() {
   const [error, setError] = useState("");
   const [isPaying, setIsPaying] = useState(false);
 
+  // Load business and filtered doctor from the clinic API.
   useEffect(() => {
     let cancelled = false;
 
-    async function fetchClinics() {
-      setLoadingClinics(true);
+    async function fetchClinic() {
+      if (!clinicId) return;
+
+      setLoadingClinic(true);
       setClinicError("");
 
       try {
-        const response = await fetch("/api/clinics", {
+        const url = doctorId
+          ? `/api/clinics/${clinicId}?doctor=${encodeURIComponent(doctorId)}`
+          : `/api/clinics/${clinicId}`;
+
+        const response = await fetch(url, {
           cache: "no-store",
         });
 
@@ -388,120 +513,201 @@ export default function ClinicBookingPage() {
 
         if (!response.ok || !data.success) {
           throw new Error(
-            data.message || "Failed to load clinics."
+            data.message || "Failed to load clinic details."
           );
         }
 
         if (!cancelled) {
-          setClinics(
-            Array.isArray(data.clinics) ? data.clinics : []
-          );
+          setClinic(data.clinic || null);
         }
       } catch (err) {
         if (!cancelled) {
           setClinicError(
-            err.message ||
-              "Could not load clinic details. Please try again."
+            err.message || "Could not load clinic details."
           );
         }
       } finally {
-        if (!cancelled) setLoadingClinics(false);
+        if (!cancelled) setLoadingClinic(false);
       }
     }
 
-    fetchClinics();
+    fetchClinic();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [clinicId, doctorId]);
 
+
+
+  // Match doctor directly from clinic.doctors.
+  const doctor = useMemo(
+    () =>
+      clinic?.doctors?.find(
+        (item) => getDoctorId(item) === String(doctorId)
+      ) ??
+      clinic?.doctors?.[0] ??
+      null,
+    [clinic, doctorId]
+  );
+
+  const normalizedDoctorId = getDoctorId(doctor);
+
+  const fetchBookings = useCallback(
+    async ({ silent = false } = {}) => {
+      if (
+        !clinicId ||
+        !normalizedDoctorId ||
+        !appointmentDate ||
+        !collectionName
+      ) {
+        setBookings([]);
+        setBookingsError("");
+        return false;
+      }
+
+      if (silent) {
+        setRefreshingBookings(true);
+      } else {
+        setLoadingBookings(true);
+      }
+
+      setBookingsError("");
+
+      try {
+        const query = new URLSearchParams({
+          clinicId: String(clinicId),
+          doctorId: normalizedDoctorId,
+          date: appointmentDate,
+          category,
+        });
+
+        const response = await fetch(
+          `/api/bookings?${query.toString()}`,
+          {
+            method: "GET",
+            cache: "no-store",
+            headers: {
+              Accept: "application/json",
+            },
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || data.success === false) {
+          throw new Error(
+            data.message || "Failed to fetch appointment bookings."
+          );
+        }
+
+        const records = extractBookings(data);
+
+        if (!records) {
+          throw new Error(
+            "The bookings API did not return a bookings array. Expected { success: true, bookings: [...] }."
+          );
+        }
+
+        setBookings(records);
+        return true;
+      } catch (err) {
+        setBookingsError(
+          err.message || "Unable to fetch appointment bookings."
+        );
+
+        return false;
+      } finally {
+        setLoadingBookings(false);
+        setRefreshingBookings(false);
+      }
+    },
+    [
+      clinicId,
+      normalizedDoctorId,
+      appointmentDate,
+      category,
+      collectionName,
+    ]
+  );
+
+  // Fetch bookings for the selected date and doctor.
   useEffect(() => {
-    if (status === "loading") return;
-
-    if (status === "unauthenticated") {
-      setProfileLoading(false);
-      router.replace("/login");
+    if (!appointmentDate || !clinicId || !normalizedDoctorId) {
+      setBookings([]);
+      setBookingsError("");
+      setLoadingBookings(false);
       return;
     }
 
     let cancelled = false;
+    const controller = new AbortController();
 
-    async function loadProfile() {
-      setProfileLoading(true);
+    async function loadBookings() {
+      setLoadingBookings(true);
+      setBookingsError("");
 
       try {
-        const response = await fetch("/api/profile", {
-          cache: "no-store",
+        const query = new URLSearchParams({
+          clinicId: String(clinicId),
+          doctorId: normalizedDoctorId,
+          date: appointmentDate,
+          category,
         });
+
+        const response = await fetch(
+          `/api/bookings?${query.toString()}`,
+          {
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
 
         const data = await response.json();
 
-        if (!response.ok) {
+        if (!response.ok || data.success === false) {
           throw new Error(
-            data.message || "Could not load your profile."
+            data.message || "Failed to load bookings."
           );
         }
 
-        if (cancelled) return;
+        const records = extractBookings(data);
 
-        const profile = data.profile ?? data.user ?? data;
-
-        setPatientName(
-          (current) =>
-            current ||
-            profile.name ||
-            profile.fullName ||
-            session?.user?.name ||
-            ""
-        );
-
-        if (
-          profile.age !== undefined &&
-          profile.age !== null &&
-          profile.age !== ""
-        ) {
-          setAge((current) =>
-            current === "" ? String(profile.age) : current
+        if (!records) {
+          throw new Error(
+            "Invalid bookings API response: expected a bookings array."
           );
         }
 
-        if (profile.gender) {
-          setGender((current) => current || profile.gender);
-        }
-      } catch {
         if (!cancelled) {
-          setPatientName(
-            (current) => current || session?.user?.name || ""
+          setBookings(records);
+          setBookingsError("");
+        }
+      } catch (err) {
+        if (!cancelled && err.name !== "AbortError") {
+          setBookings([]);
+          setBookingsError(
+            err.message || "Could not load appointment bookings."
           );
         }
       } finally {
-        if (!cancelled) setProfileLoading(false);
+        if (!cancelled) setLoadingBookings(false);
       }
     }
 
-    loadProfile();
+    loadBookings();
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [status, session?.user?.name, router]);
-
-  const clinic = useMemo(
-    () =>
-      clinics.find(
-        (item) => String(item.id) === String(clinicId)
-      ),
-    [clinics, clinicId]
-  );
-
-  const doctor = useMemo(
-    () =>
-      clinic?.doctors?.find(
-        (item) => String(item.id) === String(doctorId)
-      ) || null,
-    [clinic, doctorId]
-  );
+  }, [
+    clinicId,
+    normalizedDoctorId,
+    appointmentDate,
+    category,
+    bookingRefreshKey,
+  ]);
 
   const availableDates = useMemo(
     () => (doctor ? getAvailableDates(doctor) : []),
@@ -526,14 +732,14 @@ export default function ClinicBookingPage() {
     const selectedDate = new Date(year, month - 1, day);
     const dayKey = dayNames[selectedDate.getDay()];
 
-    return doctor.schedule?.[dayKey] || null;
+    return getDoctorDaySchedule(doctor, dayKey, appointmentDate);
   }, [doctor, appointmentDate]);
 
   const availableTimes = useMemo(() => {
     if (
       !appointmentDate ||
       !selectedDoctorSchedule?.active ||
-      !Array.isArray(selectedDoctorSchedule.slots)
+      !Array.isArray(selectedDoctorSchedule?.slots)
     ) {
       return [];
     }
@@ -561,10 +767,10 @@ export default function ClinicBookingPage() {
       .map((slot, index) => {
         const capacityInfo = getSlotCapacityInfo(
           slot,
-          doctor,
+          bookings,
           appointmentDate,
           clinicId,
-          doctorId
+          normalizedDoctorId
         );
 
         return {
@@ -578,9 +784,9 @@ export default function ClinicBookingPage() {
   }, [
     appointmentDate,
     selectedDoctorSchedule,
-    doctor,
+    bookings,
     clinicId,
-    doctorId,
+    normalizedDoctorId,
   ]);
 
   useEffect(() => {
@@ -615,8 +821,7 @@ export default function ClinicBookingPage() {
 
   const isPageLoading =
     status === "loading" ||
-    loadingClinics ||
-    profileLoading;
+    loadingClinic
 
   const handleDateChange = (event) => {
     setAppointmentDate(event.target.value);
@@ -632,7 +837,12 @@ export default function ClinicBookingPage() {
       return false;
     }
 
-    if (!clinic || !doctor) {
+    if (!collectionName) {
+      setError("Invalid business category.");
+      return false;
+    }
+
+    if (!clinic || !doctor || !normalizedDoctorId) {
       setError("Clinic or doctor details could not be found.");
       return false;
     }
@@ -668,9 +878,14 @@ export default function ClinicBookingPage() {
       return false;
     }
 
+    if (selectedDoctorSchedule?.isHoliday) {
+      setError("The doctor is on holiday on the selected date.");
+      return false;
+    }
+
     if (
       !selectedDoctorSchedule?.active ||
-      !Array.isArray(selectedDoctorSchedule.slots) ||
+      !Array.isArray(selectedDoctorSchedule?.slots) ||
       selectedDoctorSchedule.slots.length === 0
     ) {
       setError(
@@ -689,7 +904,6 @@ export default function ClinicBookingPage() {
     );
 
     if (!currentSlot) {
-      setAppointmentTime("");
       setError(
         "This appointment slot is no longer available. Please select another slot."
       );
@@ -711,9 +925,16 @@ export default function ClinicBookingPage() {
       return false;
     }
 
+    if (bookingsError) {
+      setError(
+        "Patient availability could not be verified. Please refresh the booking counts and try again."
+      );
+      return false;
+    }
+
     if (!Number.isFinite(bookingCharge) || bookingCharge <= 0) {
       setError(
-        "The booking charge is not configured for this doctor. Please contact the clinic."
+        "The booking charge is not configured for this doctor."
       );
       return false;
     }
@@ -722,28 +943,95 @@ export default function ClinicBookingPage() {
   };
 
   const handlePayment = async () => {
-    if (isPaying || isPageLoading || !validateForm()) return;
-
-    const currentSlot = availableTimes.find(
-      (slot) => slot.open === appointmentTime
-    );
-
-    if (
-      !currentSlot ||
-      !currentSlot.configured ||
-      currentSlot.isFull
-    ) {
-      setAppointmentTime("");
-      setError(
-        "This slot is full or unavailable. Please select another slot."
-      );
-      return;
-    }
+    if (isPaying || isPageLoading) return;
+    if (!validateForm()) return;
 
     setIsPaying(true);
     setError("");
 
     try {
+      const query = new URLSearchParams({
+        clinicId: String(clinicId),
+        doctorId: normalizedDoctorId,
+        date: appointmentDate,
+        category,
+      });
+
+      const bookingsResponse = await fetch(
+        `/api/bookings?${query.toString()}`,
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json",
+          },
+        }
+      );
+
+      const bookingsData = await bookingsResponse.json();
+
+      if (
+        !bookingsResponse.ok ||
+        bookingsData.success === false
+      ) {
+        throw new Error(
+          bookingsData.message ||
+            "Unable to verify current patient availability."
+        );
+      }
+
+      const latestBookings = extractBookings(bookingsData);
+
+      if (!latestBookings) {
+        throw new Error(
+          "The bookings API did not return a valid bookings list."
+        );
+      }
+
+      setBookings(latestBookings);
+
+      const slot = selectedDoctorSchedule?.slots?.find(
+        (item) => item.open === appointmentTime
+      );
+
+      if (!slot) {
+        throw new Error(
+          "This slot is no longer available. Please select another slot."
+        );
+      }
+
+      const latestCapacity = getSlotCapacityInfo(
+        slot,
+        latestBookings,
+        appointmentDate,
+        clinicId,
+        normalizedDoctorId
+      );
+
+      if (!latestCapacity.configured || latestCapacity.isFull) {
+        setAppointmentTime("");
+        throw new Error(
+          "This appointment slot is full or its capacity is not configured. Please choose another slot."
+        );
+      }
+
+      const { date: today, minutes: currentMinutes } =
+        getIndiaDateTime();
+
+      const slotEnd = parseSlotMinutes(slot.close);
+
+      if (
+        appointmentDate < today ||
+        (appointmentDate === today &&
+          slotEnd !== null &&
+          slotEnd <= currentMinutes)
+      ) {
+        setAppointmentTime("");
+        throw new Error(
+          "This appointment time has already passed. Please select another slot."
+        );
+      }
+
       const orderResponse = await fetch(
         "/api/payment/create-order",
         {
@@ -752,16 +1040,17 @@ export default function ClinicBookingPage() {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            clinicId,
-            doctorId,
+            category,
+            clinicId: String(clinicId),
+            doctorId: normalizedDoctorId,
             patientName: patientName.trim(),
             age: Number(age),
             gender,
             date: appointmentDate,
             time: appointmentTime,
             slot: {
-              open: currentSlot.open,
-              close: currentSlot.close,
+              open: slot.open,
+              close: slot.close,
             },
           }),
         }
@@ -769,9 +1058,19 @@ export default function ClinicBookingPage() {
 
       const orderData = await orderResponse.json();
 
-      if (!orderResponse.ok || !orderData.success) {
+      if (!orderResponse.ok || orderData.success === false) {
         throw new Error(
-          orderData.message || "Could not create payment order."
+          orderData.message || "Failed to create payment order."
+        );
+      }
+
+      if (
+        !orderData.key ||
+        !orderData.orderId ||
+        !Number.isFinite(Number(orderData.amount))
+      ) {
+        throw new Error(
+          "The payment API returned incomplete Razorpay order details."
         );
       }
 
@@ -786,9 +1085,9 @@ export default function ClinicBookingPage() {
       const checkout = new window.Razorpay({
         key: orderData.key,
         amount: orderData.amount,
-        currency: orderData.currency,
+        currency: orderData.currency || "INR",
         name: "Zeric",
-        description: `Clinic booking charge - ${doctor.name}`,
+        description: `Appointment booking - ${doctor.name}`,
         order_id: orderData.orderId,
 
         prefill: {
@@ -797,9 +1096,10 @@ export default function ClinicBookingPage() {
         },
 
         notes: {
-          clinicId,
-          doctorId,
+          clinicId: String(clinicId),
+          doctorId: normalizedDoctorId,
           appointmentDate,
+          category,
         },
 
         theme: {
@@ -830,7 +1130,7 @@ export default function ClinicBookingPage() {
             if (!verifyResponse.ok || !verifyData.success) {
               setError(
                 verifyData.message ||
-                  "Payment verification failed. Please check My Bookings before trying again."
+                  "Payment verification failed. Check My Bookings before trying again."
               );
 
               setIsPaying(false);
@@ -875,7 +1175,6 @@ export default function ClinicBookingPage() {
     return (
       <main className="min-h-screen bg-gray-50">
         <Header showBack={false} />
-
         <div className="flex min-h-[65vh] items-center justify-center text-sm text-gray-500">
           Redirecting to login...
         </div>
@@ -905,14 +1204,18 @@ export default function ClinicBookingPage() {
                 "The selected clinic or doctor could not be found. Please return and select a doctor again."}
             </p>
 
-          <button
-  type="button"
-  onClick={() => router.push(`/clinics/${clinicId}`)}
-  className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-gray-600 transition hover:text-indigo-600"
->
-  <ArrowLeft className="h-4 w-4" />
-  Back
-</button>
+            <button
+              type="button"
+              onClick={() =>
+                router.push(
+                  `/${category === "clinic" ? "clinics" : collectionName}/${clinicId}`
+                )
+              }
+              className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-indigo-600"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back
+            </button>
           </div>
         </div>
       </main>
@@ -927,7 +1230,7 @@ export default function ClinicBookingPage() {
         <button
           type="button"
           onClick={() => router.back()}
-          className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-gray-600 transition hover:text-indigo-600"
+          className="mb-5 inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-indigo-600"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
@@ -960,6 +1263,7 @@ export default function ClinicBookingPage() {
           </div>
 
           <div className="space-y-6 p-5 sm:p-7">
+            {/* Doctor and clinic details */}
             <div className="rounded-2xl bg-indigo-50 p-4 sm:p-5">
               <div className="flex items-start gap-3">
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white">
@@ -989,7 +1293,7 @@ export default function ClinicBookingPage() {
                   <div className="mt-3 flex flex-wrap gap-2">
                     <span className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-gray-600">
                       <User className="h-3.5 w-3.5 text-indigo-500" />
-                      Consultation
+                      General Consultation
                     </span>
 
                     <span className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-medium text-gray-600">
@@ -1015,6 +1319,7 @@ export default function ClinicBookingPage() {
               </div>
             </div>
 
+            {/* Patient information */}
             <div>
               <h2 className="text-base font-bold text-gray-900">
                 Patient Information
@@ -1044,7 +1349,7 @@ export default function ClinicBookingPage() {
                   }}
                   placeholder="Enter patient name"
                   autoComplete="name"
-                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
                 />
               </div>
 
@@ -1068,7 +1373,7 @@ export default function ClinicBookingPage() {
                       setError("");
                     }}
                     placeholder="Enter age"
-                    className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                    className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
                   />
                 </div>
 
@@ -1087,9 +1392,9 @@ export default function ClinicBookingPage() {
                       setGender(event.target.value);
                       setError("");
                     }}
-                    className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                    className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
                   >
-                    <option value="">Select gender</option>
+                   
                     <option value="Male">Male</option>
                     <option value="Female">Female</option>
                     <option value="Other">Other</option>
@@ -1098,22 +1403,25 @@ export default function ClinicBookingPage() {
               </div>
             </div>
 
+            {/* Appointment date */}
             <div>
-              <h2 className="text-base font-bold text-gray-900">
-                Appointment Date
-              </h2>
+              <div>
+                <h2 className="text-base font-bold text-gray-900">
+                  Appointment Date
+                </h2>
 
-              <p className="mt-1 text-xs text-gray-500">
-                Select a date based on the doctor's working schedule.
-              </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Select a date based on the doctor's working schedule.
+                </p>
+              </div>
 
               <div className="mt-3">
                 <select
                   value={appointmentDate}
                   onChange={handleDateChange}
-                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
                 >
-                  <option value="">Select appointment date</option>
+                 
 
                   {availableDates.map((date) => (
                     <option
@@ -1122,43 +1430,47 @@ export default function ClinicBookingPage() {
                       disabled={date.isClosed}
                     >
                       {date.label}
-                      {date.isClosed ? " — Not Available" : ""}
+                      {date.isHoliday
+                        ? " — Doctor On Holiday"
+                        : date.isClosed
+                          ? " — Not Available"
+                          : ""}
                     </option>
                   ))}
                 </select>
               </div>
 
-              {selectedDateInfo && (
+              {bookingsError && appointmentDate && (
                 <div
-                  className={`mt-3 rounded-xl px-4 py-3 ${
-                    selectedDateInfo.isClosed
-                      ? "border border-red-100 bg-red-50"
-                      : "bg-indigo-50"
-                  }`}
+                  role="alert"
+                  className="mt-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600"
                 >
+                  {bookingsError}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setBookingRefreshKey((key) => key + 1)
+                    }
+                    className="ml-2 font-semibold underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {selectedDateInfo && (
+                <div className="mt-3 rounded-xl bg-indigo-50 px-4 py-3">
                   <div className="flex items-start gap-2">
-                    <CalendarDays
-                      className={`mt-0.5 h-4 w-4 shrink-0 ${
-                        selectedDateInfo.isClosed
-                          ? "text-red-500"
-                          : "text-indigo-600"
-                      }`}
-                    />
+                    <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
 
                     <div className="min-w-0">
-                      <p
-                        className={`text-sm font-semibold ${
-                          selectedDateInfo.isClosed
-                            ? "text-red-700"
-                            : "text-indigo-700"
-                        }`}
-                      >
+                      <p className="text-sm font-semibold text-indigo-700">
                         {formatDate(appointmentDate)}
                       </p>
 
-                      {selectedDateInfo.isClosed ? (
-                        <p className="mt-0.5 text-xs text-red-600">
-                          Doctor is not available on this day.
+                      {selectedDateInfo.isHoliday ? (
+                        <p className="mt-1 text-xs text-red-600 font-medium">
+                          Doctor is on holiday on this date.
                         </p>
                       ) : availableTimes.length > 0 ? (
                         <div className="mt-1 space-y-0.5">
@@ -1178,7 +1490,7 @@ export default function ClinicBookingPage() {
                         </div>
                       ) : (
                         <p className="mt-1 text-xs text-indigo-600">
-                          All appointment slots for this date have closed.
+                          No appointment slots are currently available.
                         </p>
                       )}
                     </div>
@@ -1187,6 +1499,7 @@ export default function ClinicBookingPage() {
               )}
             </div>
 
+            {/* Appointment time */}
             <div>
               <h2 className="text-base font-bold text-gray-900">
                 Appointment Time
@@ -1199,35 +1512,58 @@ export default function ClinicBookingPage() {
               {!appointmentDate ? (
                 <div className="mt-3 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-center">
                   <Clock className="mx-auto h-6 w-6 text-gray-400" />
-
                   <p className="mt-2 text-sm font-medium text-gray-500">
                     Select a date first
+                  </p>
+                </div>
+              ) : selectedDoctorSchedule?.isHoliday ? (
+                <div className="mt-3 rounded-xl border border-red-100 bg-red-50 p-5 text-center">
+                  <Clock className="mx-auto h-6 w-6 text-red-400" />
+                  <p className="mt-2 text-sm font-semibold text-red-700">
+                    Doctor is on Holiday
+                  </p>
+                  <p className="mt-1 text-xs text-red-600">
+                    No appointments available on this date.
                   </p>
                 </div>
               ) : !selectedDoctorSchedule?.active ||
                 !selectedDoctorSchedule?.slots?.length ? (
                 <div className="mt-3 rounded-xl border border-red-100 bg-red-50 p-5 text-center">
                   <Clock className="mx-auto h-6 w-6 text-red-400" />
-
                   <p className="mt-2 text-sm font-semibold text-red-700">
                     Doctor Not Available
                   </p>
-
-                  <p className="mt-1 text-xs text-red-600">
-                    This doctor has no schedule on the selected day.
+                </div>
+              ) : loadingBookings ? (
+                <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-5 text-center">
+                  <LoaderCircle className="mx-auto h-6 w-6 animate-spin text-indigo-500" />
+                  <p className="mt-2 text-sm text-gray-500">
+                    Loading current patient counts...
                   </p>
+                </div>
+              ) : bookingsError ? (
+                <div className="mt-3 rounded-xl border border-red-100 bg-red-50 p-5 text-center">
+                  <p className="text-sm font-semibold text-red-700">
+                    Availability could not be verified
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setBookingRefreshKey((key) => key + 1)
+                    }
+                    className="mt-2 text-sm font-semibold text-red-700 underline"
+                  >
+                    Retry
+                  </button>
                 </div>
               ) : availableTimes.length === 0 ? (
                 <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-5 text-center">
                   <Clock className="mx-auto h-6 w-6 text-amber-500" />
-
                   <p className="text-sm font-semibold text-amber-700">
                     No appointment slots available
                   </p>
-
                   <p className="mt-1 text-xs text-amber-600">
                     All slots for the selected date have already closed.
-                    Please choose another date.
                   </p>
                 </div>
               ) : (
@@ -1258,7 +1594,6 @@ export default function ClinicBookingPage() {
                       >
                         <div className="flex items-center gap-2">
                           <Clock className="h-4 w-4 shrink-0" />
-
                           <span className="text-sm font-semibold">
                             {slot.label}
                           </span>
@@ -1307,6 +1642,7 @@ export default function ClinicBookingPage() {
               )}
             </div>
 
+            {/* Selected appointment */}
             {appointmentDate && appointmentTime && (
               <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-4">
                 <div className="flex items-start gap-3">
@@ -1382,15 +1718,19 @@ export default function ClinicBookingPage() {
               </div>
             )}
 
+            {/* Payment */}
             <button
               type="button"
               onClick={handlePayment}
               disabled={
                 isPageLoading ||
                 isPaying ||
+                loadingBookings ||
+                !!bookingsError ||
                 isSlotUnavailable ||
                 !clinic ||
                 !doctor ||
+                !normalizedDoctorId ||
                 !patientName.trim() ||
                 age === "" ||
                 !Number.isInteger(Number(age)) ||
@@ -1400,12 +1740,17 @@ export default function ClinicBookingPage() {
                 !Number.isFinite(bookingCharge) ||
                 bookingCharge <= 0
               }
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-indigo-700 hover:shadow-md active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-gray-400 disabled:shadow-none disabled:opacity-70"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-400 disabled:opacity-70"
             >
               {isPaying ? (
                 <>
                   <LoaderCircle className="h-5 w-5 animate-spin" />
                   Processing Payment...
+                </>
+              ) : loadingBookings ? (
+                <>
+                  <LoaderCircle className="h-5 w-5 animate-spin" />
+                  Checking Availability...
                 </>
               ) : isSlotUnavailable ? (
                 <>
@@ -1423,7 +1768,7 @@ export default function ClinicBookingPage() {
             </button>
 
             <p className="text-center text-xs text-gray-400">
-              Your appointment is confirmed only after the payment is verified.
+              Your appointment is confirmed only after payment is verified.
             </p>
           </div>
         </div>
