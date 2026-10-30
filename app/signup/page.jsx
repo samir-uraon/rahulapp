@@ -116,8 +116,8 @@ export default function Signup() {
     }
   };
 
-    const handleBack = () => {
-    window.history.back();
+  const handleBack = () => {
+    window.location.href = "/";
   };
 
   return (
@@ -140,7 +140,7 @@ export default function Signup() {
             ←
           </span>
 
-          <span>Back</span>
+          <span>Home</span>
         </button>
       </div>
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-md items-center justify-center sm:min-h-[calc(100vh-5rem)]">

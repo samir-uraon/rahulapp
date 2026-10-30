@@ -32,9 +32,9 @@ export default function GoUpButton() {
       type="button"
       onClick={goToTop}
       aria-label="Go to top"
-      className="fixed bottom-8 right-8 z-50 flex h-9 w-9 items-center justify-center rounded-full bg-slate-500 hover:bg-slate-600 text-white shadow-lg transition-all duration-200 hover:scale-105 active:scale-95 sm:bottom-10 sm:right-10"
+      className="fixed bottom-8 right-8 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-slate-500 hover:bg-slate-600 text-white shadow-lg transition-all duration-200 hover:scale-105 active:scale-95 sm:bottom-10 sm:right-10"
     >
-      <ArrowUp size={20} />
+      <ArrowUp size={22} />
     </button>
   );
 }

@@ -108,7 +108,7 @@ export default function Login() {
           <button
             type="button"
             onClick={handleBack}
-            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-semibold text-slate-600 transition hover:bg-white hover:text-indigo-600 active:scale-95"
+            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-200 hover:text-indigo-600 active:scale-95"
           >
             <span className="text-lg leading-none">←</span>
             <span>Home</span>
@@ -132,7 +132,7 @@ Made simpler and Much faster            </p>
           <div className="mb-5 flex rounded-xl bg-slate-100 p-1 text-xs font-semibold sm:mb-6 sm:text-sm">
             <button
               type="button"
-              className="flex min-h-[40px] flex-1 items-center justify-center rounded-lg bg-white px-2 py-2.5 font-bold text-indigo-600 shadow-sm"
+              className="flex min-h-[30px] flex-1 items-center justify-center rounded-lg bg-white px-2 py-2.5 font-bold text-indigo-600 shadow-sm"
             >
               Login
             </button>
@@ -142,7 +142,7 @@ Made simpler and Much faster            </p>
               onClick={() => {
                 window.location.href = "/signup";
               }}
-              className="flex min-h-[40px] flex-1 items-center justify-center rounded-lg px-2 py-2.5 text-slate-600 transition hover:text-indigo-600 active:scale-[0.98]"
+              className="flex min-h-[30px] flex-1 items-center justify-center rounded-lg px-2 py-2.5 text-slate-600 transition hover:text-indigo-600 active:scale-[0.98]"
             >
               Create Account
             </button>
@@ -175,7 +175,7 @@ Made simpler and Much faster            </p>
                   formData.identifier.length > 0 &&
                   !isIdentifierValid
                 }
-                className={`min-h-[46px] w-full rounded-xl border bg-slate-50 px-3.5 py-3 text-sm text-slate-900 outline-none transition focus:border-transparent focus:ring-2 ${
+                className={`min-h-[30px] w-full rounded-xl border bg-slate-50 px-3.5 py-3 text-sm text-slate-900 outline-none transition focus:border-transparent focus:ring-2 ${
                   formData.identifier.length > 0 &&
                   !isIdentifierValid
                     ? "border-red-400 focus:ring-red-500"
@@ -211,7 +211,7 @@ Made simpler and Much faster            </p>
                 maxLength={64}
                 autoComplete="current-password"
                 required
-                className={`min-h-[46px] w-full rounded-xl border bg-slate-50 px-3.5 py-3 text-sm text-slate-900 outline-none transition focus:border-transparent focus:ring-2 ${
+                className={`min-h-[30px] w-full rounded-xl border bg-slate-50 px-3.5 py-3 text-sm text-slate-900 outline-none transition focus:border-transparent focus:ring-2 ${
                   formData.password.length > 0 &&
                   formData.password.length < 8
                     ? "border-red-400 focus:ring-red-500"
@@ -244,7 +244,7 @@ Made simpler and Much faster            </p>
             <button
               type="submit"
               disabled={loading}
-              className="min-h-[46px] w-full rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white shadow-md shadow-indigo-200 transition-all hover:bg-indigo-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-indigo-400 disabled:shadow-none"
+              className="min-h-[30px] w-full rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white shadow-md shadow-indigo-200 transition-all hover:bg-indigo-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-indigo-400 disabled:shadow-none"
             >
               {loading ? "Logging in..." : "Login to Continue →"}
             </button>
@@ -266,7 +266,7 @@ Made simpler and Much faster            </p>
             type="button"
             onClick={handleGoogleLogin}
             disabled={loading}
-            className="group flex min-h-[46px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
+            className="group flex min-h-[30px] w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
           >
             <svg
               className="h-5 w-5 shrink-0 transition-transform duration-200 group-hover:scale-110"

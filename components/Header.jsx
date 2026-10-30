@@ -64,33 +64,33 @@ export default function Header({ user, showBack = false }) {
         {/* RIGHT SIDE */}
         <div className="flex shrink-0 items-center gap-5 sm:gap-4">
 
-          {/* PLANS / SUBSCRIPTION */}
-          <Link
-            href="/plans"
-            aria-label="View subscription plans"
-            title="Subscription Plans"
-            className="
-              group inline-flex h-9 shrink-0 items-center justify-center gap-2
-              rounded-full border border-indigo-200 bg-indigo-50
-              px-3 text-indigo-700
-              transition-all duration-200
-              hover:border-indigo-300 hover:bg-indigo-100
-              active:scale-95
-              focus-visible:outline-none focus-visible:ring-2
-              focus-visible:ring-indigo-500 focus-visible:ring-offset-2
-              sm:h-10 sm:px-4
-            "
-          >
-        <Gift
-  size={19}
-  strokeWidth={2}
-  className="shrink-0 transition-transform duration-200 group-hover:-rotate-6"
-/>
+        {/* PLANS / SUBSCRIPTION */}
+<Link
+  href="/plans"
+  aria-label="View subscription plans"
+  title="Subscription Plans"
+  className="
+    group inline-flex h-9 w-9 shrink-0 items-center justify-center
+    rounded-full border border-indigo-200 bg-indigo-50
+    text-indigo-700
+    transition-all duration-200
+    hover:border-indigo-300 hover:bg-indigo-100
+    active:scale-95
+    focus-visible:outline-none focus-visible:ring-2
+    focus-visible:ring-indigo-500 focus-visible:ring-offset-2
+    sm:h-10 sm:w-auto sm:gap-2 sm:rounded-full sm:px-4
+  "
+>
+  <Gift
+    size={19}
+    strokeWidth={2}
+    className="shrink-0 transition-transform duration-200 group-hover:-rotate-6"
+  />
 
-            <span className="hidden whitespace-nowrap text-sm font-semibold sm:inline">
-              Plans
-            </span>
-          </Link>
+  <span className="hidden whitespace-nowrap text-sm font-semibold sm:inline">
+    Plans
+  </span>
+</Link>
 
           {/* DESKTOP PROFILE */}
           <Link
@@ -129,7 +129,7 @@ export default function Header({ user, showBack = false }) {
             className="
               relative inline-flex h-9 w-9 shrink-0 items-center
               justify-center rounded-full border-2 border-indigo-200
-              bg-indigo-600 text-sm font-bold text-white
+              bg-indigo-600 text-md font-bold text-white
               shadow-sm transition-all duration-200
               hover:bg-indigo-700 active:scale-95
               sm:hidden
