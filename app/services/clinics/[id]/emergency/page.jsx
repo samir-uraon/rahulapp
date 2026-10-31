@@ -1,11 +1,7 @@
+
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useEffect, useState } from "react";
 import {
   useParams,
   useRouter,
@@ -19,7 +15,6 @@ import LoadingScreen from "@/components/LoadingScreen";
 
 import {
   ArrowLeft,
-  CalendarDays,
   CheckCircle2,
   Clock,
   LoaderCircle,
@@ -28,17 +23,12 @@ import {
   User,
   AlertCircle,
   ShieldCheck,
+  Timer,
+  Zap,
+  Phone,
 } from "lucide-react";
 
-const dayNames = [
-  "sunday",
-  "monday",
-  "tuesday",
-  "wednesday",
-  "thursday",
-  "friday",
-  "saturday",
-];
+const ARRIVAL_OPTIONS = [5, 10, 15, 20, 30, 40, 60];
 
 const CATEGORIES = {
   clinic: "clinics",
@@ -46,6 +36,10 @@ const CATEGORIES = {
   "beauty-parlour": "parlour",
   "diagnostic-centre": "diagnostic",
 };
+
+// --------------------------------------------------
+// HELPERS
+// --------------------------------------------------
 
 function getDoctorId(doctor) {
   const value = doctor?._id ?? doctor?.id;
@@ -62,323 +56,9 @@ function getDoctorId(doctor) {
     if (typeof value.$oid === "string") {
       return value.$oid;
     }
-
-    return String(value);
   }
 
   return String(value);
-}
-
-function getDoctorDaySchedule(doctor, dayKey) {
-  const schedule = doctor?.schedule;
-
-  if (!schedule || typeof schedule !== "object") {
-    return null;
-  }
-
-  const matchingKey = Object.keys(schedule).find(
-    (key) => key.toLowerCase() === dayKey.toLowerCase()
-  );
-
-  return matchingKey ? schedule[matchingKey] : null;
-}
-
-function getDateValue(date) {
-  return [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0"),
-  ].join("-");
-}
-
-function formatDate(dateString) {
-  if (!dateString) return "";
-
-  const [year, month, day] = dateString.split("-").map(Number);
-
-  return new Date(year, month - 1, day).toLocaleDateString(
-    "en-IN",
-    {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    }
-  );
-}
-
-function parseSlotMinutes(value) {
-  if (value === undefined || value === null || value === "") {
-    return null;
-  }
-
-  const match =
-    /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i.exec(
-      String(value).trim()
-    );
-
-  if (!match) return null;
-
-  let hour = Number(match[1]);
-  const minute = Number(match[2]);
-  const period = match[3]?.toUpperCase();
-
-  if (minute > 59) return null;
-
-  if (period) {
-    if (hour < 1 || hour > 12) return null;
-
-    if (period === "AM" && hour === 12) hour = 0;
-    if (period === "PM" && hour !== 12) hour += 12;
-  } else if (hour > 23) {
-    return null;
-  }
-
-  return hour * 60 + minute;
-}
-
-function formatTime(value) {
-  if (!value) return "";
-
-  const minutes = parseSlotMinutes(value);
-
-  if (minutes === null) return String(value);
-
-  const date = new Date(2000, 0, 1);
-  date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
-
-  return date.toLocaleTimeString("en-IN", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-function getIndiaDateTime() {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date());
-
-  const getPart = (type) =>
-    parts.find((part) => part.type === type)?.value;
-
-  return {
-    date: `${getPart("year")}-${getPart("month")}-${getPart("day")}`,
-    minutes:
-      Number(getPart("hour")) * 60 +
-      Number(getPart("minute")),
-  };
-}
-
-function normalizeDate(value) {
-  if (!value) return "";
-
-  if (typeof value === "string") {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-      return value;
-    }
-
-    const parsed = new Date(value);
-
-    if (!Number.isNaN(parsed.getTime())) {
-      return getDateValue(parsed);
-    }
-  }
-
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return getDateValue(value);
-  }
-
-  return "";
-}
-
-function getBookingSlot(booking) {
-  const slot = booking?.slot || {};
-
-  return {
-    open:
-      slot.open ??
-      booking?.slotOpen ??
-      booking?.time ??
-      booking?.appointmentTime ??
-      "",
-    close:
-      slot.close ??
-      booking?.slotClose ??
-      "",
-  };
-}
-
-function getBookingClinicId(booking) {
-  return (
-    booking?.clinicId ??
-    booking?.businessId ??
-    booking?.clinic?.id ??
-    booking?.clinic?._id ??
-    null
-  );
-}
-
-function getBookingDoctorId(booking) {
-  const value =
-    booking?.doctorId ??
-    booking?.doctor?._id ??
-    booking?.doctor?.id ??
-    null;
-
-  if (value === undefined || value === null || value === "") {
-    return null;
-  }
-
-  if (typeof value === "object") {
-    if (typeof value.toHexString === "function") {
-      return value.toHexString();
-    }
-
-    if (typeof value.$oid === "string") {
-      return value.$oid;
-    }
-  }
-
-  return String(value);
-}
-
-function isBookingCountable(booking) {
-  const status = String(booking?.status || "").toLowerCase();
-
-  const paymentStatus = String(
-    booking?.paymentStatus || ""
-  ).toLowerCase();
-
-  if (
-    [
-      "cancelled",
-      "canceled",
-      "no-show",
-      "noshow",
-      "rejected",
-    ].includes(status)
-  ) {
-    return false;
-  }
-
-  if (
-    ["failed", "unpaid", "refunded"].includes(paymentStatus)
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
-function getSlotCapacityInfo(
-  slot,
-  bookings,
-  appointmentDate,
-  clinicId,
-  doctorId
-) {
-  const capacity = Number(slot.capacity);
-
-  const bookedCount = bookings.filter((booking) => {
-    if (!isBookingCountable(booking)) return false;
-
-    const bookingClinicId = getBookingClinicId(booking);
-    const bookingDoctorId = getBookingDoctorId(booking);
-
-    const bookingDate = normalizeDate(
-      booking.date ??
-        booking.appointmentDate ??
-        booking.bookingDate
-    );
-
-    const bookingSlot = getBookingSlot(booking);
-
-    const bookingOpen = parseSlotMinutes(bookingSlot.open);
-    const bookingClose = parseSlotMinutes(bookingSlot.close);
-    const slotOpen = parseSlotMinutes(slot.open);
-    const slotClose = parseSlotMinutes(slot.close);
-
-    const sameClinic =
-      bookingClinicId !== null &&
-      String(bookingClinicId) === String(clinicId);
-
-    const sameDoctor =
-      bookingDoctorId !== null &&
-      String(bookingDoctorId) === String(doctorId);
-
-    const sameDate = bookingDate === appointmentDate;
-
-    const sameSlot =
-      bookingOpen !== null &&
-      bookingClose !== null &&
-      slotOpen !== null &&
-      slotClose !== null &&
-      bookingOpen === slotOpen &&
-      bookingClose === slotClose;
-
-    return sameClinic && sameDoctor && sameDate && sameSlot;
-  }).length;
-
-  const configured =
-    Number.isFinite(capacity) &&
-    Number.isInteger(capacity) &&
-    capacity > 0;
-
-  return {
-    capacity,
-    bookedCount,
-    remaining: configured
-      ? Math.max(0, capacity - bookedCount)
-      : 0,
-    configured,
-    isFull: !configured || bookedCount >= capacity,
-  };
-}
-
-function getAvailableDates(doctor) {
-  const dates = [];
-  const indiaDate = getIndiaDateTime().date;
-  const [year, month, day] = indiaDate.split("-").map(Number);
-
-  const today = new Date(year, month - 1, day);
-
-  for (let i = 0; i < 14; i++) {
-    const date = new Date(today);
-    date.setDate(today.getDate() + i);
-
-    const value = getDateValue(date);
-    const dayKey = dayNames[date.getDay()];
-    const doctorSchedule = getDoctorDaySchedule(doctor, dayKey);
-
-    const isAvailable =
-      doctorSchedule?.active === true &&
-      Array.isArray(doctorSchedule?.slots) &&
-      doctorSchedule.slots.length > 0;
-
-    dates.push({
-      value,
-      dayKey,
-      dayName: date.toLocaleDateString("en-IN", { weekday: "short" }),
-      dayNumber: date.getDate(),
-      monthName: date.toLocaleDateString("en-IN", { month: "short" }),
-      label: date.toLocaleDateString("en-IN", {
-        weekday: "short",
-        day: "numeric",
-        month: "short",
-      }),
-      doctorSchedule,
-      isClosed: !isAvailable,
-    });
-  }
-
-  return dates;
 }
 
 function loadRazorpayScript() {
@@ -417,6 +97,7 @@ function loadRazorpayScript() {
     }
 
     const script = document.createElement("script");
+
     script.src = scriptUrl;
     script.async = true;
 
@@ -431,14 +112,9 @@ function loadRazorpayScript() {
   });
 }
 
-function extractBookings(data) {
-  if (Array.isArray(data?.bookings)) return data.bookings;
-  if (Array.isArray(data?.customers)) return data.customers;
-  if (Array.isArray(data?.data)) return data.data;
-  if (Array.isArray(data?.results)) return data.results;
-
-  return null;
-}
+// --------------------------------------------------
+// MAIN COMPONENT
+// --------------------------------------------------
 
 export default function ClinicBookingPage() {
   const params = useParams();
@@ -458,44 +134,72 @@ export default function ClinicBookingPage() {
     .toLowerCase();
 
   const collectionName = CATEGORIES[category];
+
   const doctorId = searchParams.get("doctor");
+
+  // ------------------------------------------------
+  // CLINIC
+  // ------------------------------------------------
 
   const [clinic, setClinic] = useState(null);
   const [loadingClinic, setLoadingClinic] = useState(true);
   const [clinicError, setClinicError] = useState("");
 
-  const [bookings, setBookings] = useState([]);
-  const [loadingBookings, setLoadingBookings] = useState(false);
-  const [bookingsError, setBookingsError] = useState("");
-  const [bookingRefreshKey, setBookingRefreshKey] = useState(0);
+  // ------------------------------------------------
+  // PROFILE
+  // ------------------------------------------------
+
+  const [profileLoading, setProfileLoading] = useState(true);
+
+  // ------------------------------------------------
+  // PATIENT DETAILS
+  // ------------------------------------------------
 
   const [patientName, setPatientName] = useState("");
   const [age, setAge] = useState("");
+  const [phone, setPhone] = useState("");
   const [gender, setGender] = useState("");
-  const [profileLoading, setProfileLoading] = useState(true);
 
-  const [appointmentDate, setAppointmentDate] = useState("");
-  const [appointmentTime, setAppointmentTime] = useState("");
+  // ------------------------------------------------
+  // ARRIVAL TIME
+  // ------------------------------------------------
+
+  const [arrivalTime, setArrivalTime] = useState("");
+
+  // ------------------------------------------------
+  // PAYMENT
+  // ------------------------------------------------
 
   const [error, setError] = useState("");
   const [isPaying, setIsPaying] = useState(false);
 
-  // Load clinic details and specified doctor
+  // ------------------------------------------------
+  // FETCH CLINIC
+  // ------------------------------------------------
+
   useEffect(() => {
     let cancelled = false;
 
     async function fetchClinic() {
-      if (!clinicId) return;
+      if (!clinicId) {
+        setLoadingClinic(false);
+        return;
+      }
 
       setLoadingClinic(true);
       setClinicError("");
 
       try {
         const url = doctorId
-          ? `/api/${clinicId}?doctor=${encodeURIComponent(doctorId)}`
-          : `/api/${clinicId}`;
+          ? `/api/clinics/${clinicId}?doctor=${encodeURIComponent(
+              doctorId
+            )}`
+          : `/api/clinics/${clinicId}`;
 
-        const response = await fetch(url, { cache: "no-store" });
+        const response = await fetch(url, {
+          cache: "no-store",
+        });
+
         const data = await response.json();
 
         if (!response.ok || !data.success) {
@@ -514,7 +218,9 @@ export default function ClinicBookingPage() {
           );
         }
       } finally {
-        if (!cancelled) setLoadingClinic(false);
+        if (!cancelled) {
+          setLoadingClinic(false);
+        }
       }
     }
 
@@ -525,7 +231,10 @@ export default function ClinicBookingPage() {
     };
   }, [clinicId, doctorId]);
 
-  // Prefill patient information
+  // ------------------------------------------------
+  // AUTHENTICATION AND PROFILE
+  // ------------------------------------------------
+
   useEffect(() => {
     if (status === "loading") return;
 
@@ -579,14 +288,28 @@ export default function ClinicBookingPage() {
         if (profile.gender) {
           setGender((current) => current || profile.gender);
         }
+
+        if (profile.phone || profile.mobile) {
+          setPhone((current) =>
+            current || String(profile.phone || profile.mobile)
+          );
+        }
       } catch {
         if (!cancelled) {
           setPatientName(
-            (current) => current || session?.user?.name || ""
+            (current) =>
+              current || session?.user?.name || ""
+          );
+
+          setPhone(
+            (current) =>
+              current || session?.user?.phone || ""
           );
         }
       } finally {
-        if (!cancelled) setProfileLoading(false);
+        if (!cancelled) {
+          setProfileLoading(false);
+        }
       }
     }
 
@@ -595,205 +318,43 @@ export default function ClinicBookingPage() {
     return () => {
       cancelled = true;
     };
-  }, [status, session?.user?.name, router]);
+  }, [status, session, router]);
 
-  const doctor = useMemo(
-    () =>
-      clinic?.doctors?.find(
-        (item) => getDoctorId(item) === String(doctorId)
-      ) ??
-      clinic?.doctors?.[0] ??
-      null,
-    [clinic, doctorId]
-  );
+  // ------------------------------------------------
+  // SELECTED DOCTOR
+  // ------------------------------------------------
+
+  const doctor =
+    clinic?.doctors?.find(
+      (item) => getDoctorId(item) === String(doctorId)
+    ) ??
+    clinic?.doctors?.[0] ??
+    null;
 
   const normalizedDoctorId = getDoctorId(doctor);
 
-  useEffect(() => {
-    if (!appointmentDate || !clinicId || !normalizedDoctorId) {
-      setBookings([]);
-      setBookingsError("");
-      setLoadingBookings(false);
-      return;
-    }
-
-    let cancelled = false;
-    const controller = new AbortController();
-
-    async function loadBookings() {
-      setLoadingBookings(true);
-      setBookingsError("");
-
-      try {
-        const query = new URLSearchParams({
-          clinicId: String(clinicId),
-          doctorId: normalizedDoctorId,
-          date: appointmentDate,
-          category,
-        });
-
-        const response = await fetch(
-          `/api/bookings?${query.toString()}`,
-          {
-            cache: "no-store",
-            signal: controller.signal,
-          }
-        );
-
-        const data = await response.json();
-
-        if (!response.ok || data.success === false) {
-          throw new Error(
-            data.message || "Failed to load bookings."
-          );
-        }
-
-        const records = extractBookings(data);
-
-        if (!records) {
-          throw new Error("Invalid bookings API response.");
-        }
-
-        if (!cancelled) {
-          setBookings(records);
-          setBookingsError("");
-        }
-      } catch (err) {
-        if (!cancelled && err.name !== "AbortError") {
-          setBookings([]);
-          setBookingsError(
-            err.message || "Could not load appointment bookings."
-          );
-        }
-      } finally {
-        if (!cancelled) setLoadingBookings(false);
-      }
-    }
-
-    loadBookings();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [
-    clinicId,
-    normalizedDoctorId,
-    appointmentDate,
-    category,
-    bookingRefreshKey,
-  ]);
-
-  const availableDates = useMemo(
-    () => (doctor ? getAvailableDates(doctor) : []),
-    [doctor]
-  );
-
-  const selectedDoctorSchedule = useMemo(() => {
-    if (!doctor || !appointmentDate) return null;
-
-    const [year, month, day] = appointmentDate
-      .split("-")
-      .map(Number);
-
-    const selectedDate = new Date(year, month - 1, day);
-    const dayKey = dayNames[selectedDate.getDay()];
-
-    return getDoctorDaySchedule(doctor, dayKey);
-  }, [doctor, appointmentDate]);
-
-  const availableTimes = useMemo(() => {
-    if (
-      !appointmentDate ||
-      !selectedDoctorSchedule?.active ||
-      !Array.isArray(selectedDoctorSchedule?.slots)
-    ) {
-      return [];
-    }
-
-    const { date: today, minutes: currentMinutes } = getIndiaDateTime();
-    const isToday = appointmentDate === today;
-
-    return selectedDoctorSchedule.slots
-      .filter((slot) => {
-        const slotStart = parseSlotMinutes(slot.open);
-        const slotEnd = parseSlotMinutes(slot.close);
-
-        if (slotStart === null || slotEnd === null) return false;
-        if (slotEnd <= slotStart) return false;
-        if (!isToday) return true;
-
-        return slotEnd > currentMinutes;
-      })
-      .map((slot, index) => {
-        const capacityInfo = getSlotCapacityInfo(
-          slot,
-          bookings,
-          appointmentDate,
-          clinicId,
-          normalizedDoctorId
-        );
-
-        return {
-          id: `${slot.open}-${slot.close}-${index}`,
-          open: slot.open,
-          close: slot.close,
-          label: `${formatTime(slot.open)} - ${formatTime(slot.close)}`,
-          ...capacityInfo,
-        };
-      });
-  }, [
-    appointmentDate,
-    selectedDoctorSchedule,
-    bookings,
-    clinicId,
-    normalizedDoctorId,
-  ]);
-
-  useEffect(() => {
-    if (!appointmentTime) return;
-
-    const stillAvailable = availableTimes.some(
-      (slot) =>
-        slot.open === appointmentTime &&
-        slot.configured &&
-        !slot.isFull
-    );
-
-    if (!stillAvailable) {
-      setAppointmentTime("");
-    }
-  }, [availableTimes, appointmentTime]);
-
-  const selectedSlot = availableTimes.find(
-    (slot) => slot.open === appointmentTime
-  );
-
-  const isSlotUnavailable =
-    !appointmentDate ||
-    !appointmentTime ||
-    !selectedSlot ||
-    !selectedSlot.configured ||
-    selectedSlot.isFull;
+  // ------------------------------------------------
+  // BOOKING CHARGE
+  // ------------------------------------------------
 
   const bookingCharge = Number(
-    doctor?.bookingCharge ?? doctor?.fee ?? 0
+    doctor?.emergencyBookingCharge ?? doctor?.bookingCharge ?? 0
   );
 
   const isPageLoading =
-    status === "loading" || loadingClinic || profileLoading;
+    status === "loading" ||
+    loadingClinic ||
+    profileLoading;
 
-  const handleSelectDate = (dateVal) => {
-    setAppointmentDate(dateVal);
-    setAppointmentTime("");
-    setError("");
-  };
+  // ------------------------------------------------
+  // VALIDATION
+  // ------------------------------------------------
 
   const validateForm = () => {
     setError("");
 
     if (status !== "authenticated") {
-      setError("Please log in before booking an appointment.");
+      setError("Please log in before booking.");
       return false;
     }
 
@@ -803,7 +364,9 @@ export default function ClinicBookingPage() {
     }
 
     if (!clinic || !doctor || !normalizedDoctorId) {
-      setError("Clinic or doctor details could not be found.");
+      setError(
+        "Clinic or doctor details could not be found."
+      );
       return false;
     }
 
@@ -824,7 +387,14 @@ export default function ClinicBookingPage() {
       numericAge < 0 ||
       numericAge > 120
     ) {
-      setError("Please enter a valid age between 0 and 120.");
+      setError(
+        "Please enter a valid age between 0 and 120."
+      );
+      return false;
+    }
+
+    if (!/^[6-9]\d{9}$/.test(phone)) {
+      setError("Please enter a valid 10-digit phone number.");
       return false;
     }
 
@@ -833,204 +403,171 @@ export default function ClinicBookingPage() {
       return false;
     }
 
-    if (!appointmentDate) {
-      setError("Please select an appointment date.");
+    if (!arrivalTime) {
+      setError("Please select your estimated arrival time.");
+      return false;
+    }
+
+    if (!ARRIVAL_OPTIONS.includes(Number(arrivalTime))) {
+      setError("Invalid estimated arrival time.");
       return false;
     }
 
     if (
-      !selectedDoctorSchedule?.active ||
-      !Array.isArray(selectedDoctorSchedule?.slots) ||
-      selectedDoctorSchedule.slots.length === 0
+      !Number.isFinite(bookingCharge) ||
+      bookingCharge <= 0
     ) {
-      setError("The doctor is not available on the selected date.");
-      return false;
-    }
-
-    if (!appointmentTime) {
-      setError("Please select an appointment time.");
-      return false;
-    }
-
-    const currentSlot = availableTimes.find(
-      (slot) => slot.open === appointmentTime
-    );
-
-    if (!currentSlot) {
       setError(
-        "This appointment slot is no longer available. Please select another slot."
+        "The booking charge is not configured for this doctor."
       );
-      return false;
-    }
-
-    if (!currentSlot.configured) {
-      setError(
-        "Capacity is not configured for this slot. Please contact the clinic."
-      );
-      return false;
-    }
-
-    if (currentSlot.isFull) {
-      setAppointmentTime("");
-      setError("This appointment slot is full. Please select another slot.");
-      return false;
-    }
-
-    if (bookingsError) {
-      setError(
-        "Patient availability could not be verified. Please retry."
-      );
-      return false;
-    }
-
-    if (!Number.isFinite(bookingCharge) || bookingCharge <= 0) {
-      setError("The booking charge is not configured for this doctor.");
       return false;
     }
 
     return true;
   };
 
+  // ------------------------------------------------
+  // PAYMENT
+  // ------------------------------------------------
+
   const handlePayment = async () => {
     if (isPaying || isPageLoading) return;
+
     if (!validateForm()) return;
 
     setIsPaying(true);
     setError("");
 
     try {
-      const query = new URLSearchParams({
-        clinicId: String(clinicId),
-        doctorId: normalizedDoctorId,
-        date: appointmentDate,
-        category,
-      });
-
-      const bookingsResponse = await fetch(
-        `/api/bookings?${query.toString()}`,
+      // Create emergency payment order.
+      // No appointment date or time slot is selected here.
+      const orderResponse = await fetch(
+        "/api/payment/create-order",
         {
-          method: "GET",
-          cache: "no-store",
-          headers: { Accept: "application/json" },
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+
+          body: JSON.stringify({
+            category,
+
+            clinicId: String(clinicId),
+            doctorId: normalizedDoctorId,
+
+            patientName: patientName.trim(),
+            age: Number(age),
+            phone,
+            gender,
+
+            isEmergency: true,
+            priority: "emergency",
+            bookingType: "emergency",
+
+            arrivalTime: Number(arrivalTime),
+          }),
         }
       );
 
-      const bookingsData = await bookingsResponse.json();
-
-      if (!bookingsResponse.ok || bookingsData.success === false) {
-        throw new Error(
-          bookingsData.message ||
-            "Unable to verify current patient availability."
-        );
-      }
-
-      const latestBookings = extractBookings(bookingsData);
-
-      if (!latestBookings) {
-        throw new Error("Invalid bookings API response.");
-      }
-
-      setBookings(latestBookings);
-
-      const slot = selectedDoctorSchedule?.slots?.find(
-        (item) => item.open === appointmentTime
-      );
-
-      if (!slot) {
-        throw new Error("This slot is no longer available.");
-      }
-
-      const latestCapacity = getSlotCapacityInfo(
-        slot,
-        latestBookings,
-        appointmentDate,
-        clinicId,
-        normalizedDoctorId
-      );
-
-      if (!latestCapacity.configured || latestCapacity.isFull) {
-        setAppointmentTime("");
-        throw new Error("This appointment slot is now full.");
-      }
-
-      const { date: today, minutes: currentMinutes } = getIndiaDateTime();
-      const slotEnd = parseSlotMinutes(slot.close);
-
-      if (
-        appointmentDate < today ||
-        (appointmentDate === today &&
-          slotEnd !== null &&
-          slotEnd <= currentMinutes)
-      ) {
-        setAppointmentTime("");
-        throw new Error("This appointment time has already passed.");
-      }
-
-      const orderResponse = await fetch("/api/payment/create-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          category,
-          clinicId: String(clinicId),
-          doctorId: normalizedDoctorId,
-          patientName: patientName.trim(),
-          age: Number(age),
-          gender,
-          date: appointmentDate,
-          time: appointmentTime,
-          slot: { open: slot.open, close: slot.close },
-        }),
-      });
-
       const orderData = await orderResponse.json();
 
-      if (!orderResponse.ok || orderData.success === false) {
+      if (
+        !orderResponse.ok ||
+        orderData.success === false
+      ) {
         throw new Error(
-          orderData.message || "Failed to create payment order."
+          orderData.message ||
+            "Failed to create payment order."
         );
       }
 
+      if (!orderData.orderId || !orderData.key) {
+        throw new Error(
+          "Invalid payment order response from server."
+        );
+      }
+
+      // Load Razorpay.
       const scriptLoaded = await loadRazorpayScript();
 
       if (!scriptLoaded || !window.Razorpay) {
-        throw new Error("Razorpay Checkout failed to load.");
+        throw new Error(
+          "Razorpay Checkout failed to load."
+        );
       }
 
+      // Open Razorpay checkout.
       const checkout = new window.Razorpay({
         key: orderData.key,
+
         amount: orderData.amount,
+
         currency: orderData.currency || "INR",
+
         name: "Zeric",
-        description: `Appointment - ${doctor.name}`,
+
+        description: `Emergency Consultation - ${doctor.name}`,
+
         order_id: orderData.orderId,
+
         prefill: {
           name: patientName.trim(),
           email: session?.user?.email || "",
+          contact: phone,
         },
+
         notes: {
           clinicId: String(clinicId),
           doctorId: normalizedDoctorId,
-          appointmentDate,
           category,
+
+          isEmergency: "true",
+          priority: "emergency",
+
+          patientName: patientName.trim(),
+          age: String(age),
+          phone,
+          gender,
+
+          arrivalTime: `${arrivalTime} minutes`,
         },
-        theme: { color: "#4f46e5" },
+
+        theme: {
+          color: "#4f46e5",
+        },
+
         modal: {
-          ondismiss: () => setIsPaying(false),
+          ondismiss: () => {
+            setIsPaying(false);
+          },
         },
+
         handler: async (paymentResponse) => {
           try {
-            const verifyResponse = await fetch("/api/payment/verify", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(paymentResponse),
-            });
+            const verifyResponse = await fetch(
+              "/api/payment/verify",
+              {
+                method: "POST",
+
+                headers: {
+                  "Content-Type": "application/json",
+                },
+
+                body: JSON.stringify(paymentResponse),
+              }
+            );
 
             const verifyData = await verifyResponse.json();
 
-            if (!verifyResponse.ok || !verifyData.success) {
+            if (
+              !verifyResponse.ok ||
+              !verifyData.success
+            ) {
               setError(
-                verifyData.message || "Payment verification failed."
+                verifyData.message ||
+                  "Payment verification failed."
               );
+
               setIsPaying(false);
               return;
             }
@@ -1040,6 +577,7 @@ export default function ClinicBookingPage() {
             setError(
               "Payment verification failed. Please check My Bookings."
             );
+
             setIsPaying(false);
           }
         },
@@ -1047,26 +585,40 @@ export default function ClinicBookingPage() {
 
       checkout.on("payment.failed", (response) => {
         setError(
-          response?.error?.description || "Payment failed."
+          response?.error?.description ||
+            "Payment failed. Please try again."
         );
+
         setIsPaying(false);
       });
 
       checkout.open();
     } catch (err) {
-      setError(err.message || "Something went wrong.");
+      setError(
+        err.message || "Something went wrong."
+      );
+
       setIsPaying(false);
     }
   };
+
+  // ==================================================
+  // LOADING
+  // ==================================================
 
   if (isPageLoading) {
     return <LoadingScreen />;
   }
 
+  // ==================================================
+  // UNAUTHENTICATED
+  // ==================================================
+
   if (status === "unauthenticated") {
     return (
       <main className="min-h-screen bg-slate-50/50">
         <Header showBack={false} />
+
         <div className="flex min-h-[65vh] items-center justify-center text-sm font-medium text-slate-500">
           Redirecting to login...
         </div>
@@ -1074,22 +626,32 @@ export default function ClinicBookingPage() {
     );
   }
 
+  // ==================================================
+  // CLINIC ERROR
+  // ==================================================
+
   if (clinicError || !clinic || !doctor) {
     return (
       <main className="min-h-screen bg-slate-50/50">
         <Header showBack={false} />
+
         <div className="mx-auto flex min-h-[70vh] max-w-lg items-center justify-center px-4">
           <div className="w-full rounded-3xl border border-slate-200/80 bg-white p-8 text-center shadow-sm">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-50 text-rose-600">
               <Stethoscope className="h-6 w-6" />
             </div>
+
             <h1 className="mt-4 text-xl font-bold text-slate-900">
-              {clinicError ? "Unable to Load Details" : "Doctor Not Found"}
+              {clinicError
+                ? "Unable to Load Details"
+                : "Doctor Not Found"}
             </h1>
+
             <p className="mt-2 text-sm text-slate-500">
               {clinicError ||
                 "The requested doctor or clinic details could not be retrieved."}
             </p>
+
             <button
               type="button"
               onClick={() =>
@@ -1108,49 +670,79 @@ export default function ClinicBookingPage() {
     );
   }
 
+  // ==================================================
+  // MAIN PAGE
+  // ==================================================
+
   return (
     <main className="min-h-screen bg-slate-50/60 pb-16">
       <Header showBack={false} />
 
       <section className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
-        {/* Back Button */}
+
+        {/* BACK BUTTON */}
+
         <button
           type="button"
           onClick={() => router.back()}
-          className="mb-6 inline-flex items-center gap-2 rounded-xl bg-white px-3.5 py-2 text-xs font-semibold text-slate-600 shadow-sm border border-slate-200/80 transition hover:bg-slate-50 hover:text-slate-900"
+          className="mb-6 inline-flex items-center gap-2 rounded-xl border border-slate-200/80 bg-white px-3.5 py-2 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-slate-900"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           Back
         </button>
 
         <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-xl shadow-slate-200/40">
-          {/* Header Banner */}
-          <div className="border-b border-slate-100 bg-gradient-to-r from-indigo-50/80 via-white to-white p-6 sm:p-8">
+
+          {/* HEADER */}
+
+          <div className="border-b border-slate-100 bg-gradient-to-r from-rose-50/80 via-white to-white p-6 sm:p-8">
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-3.5">
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-indigo-600 text-white shadow-md shadow-indigo-200">
-                  <CalendarDays className="h-6 w-6" />
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-rose-600 text-white shadow-md shadow-rose-200">
+                  <Zap className="h-6 w-6" />
                 </div>
+
                 <div>
                   <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-                    Book Consultation
+                    Emergency Booking
                   </h1>
+
                   <p className="text-xs font-medium text-slate-500">
-                    Patient: {session?.user?.email || session?.user?.name}
+                    Quick patient registration
                   </p>
                 </div>
               </div>
 
-              <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200/60">
+              <span className="hidden items-center gap-1.5 rounded-full border border-emerald-200/60 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 sm:inline-flex">
                 <ShieldCheck className="h-3.5 w-3.5" />
-                Verified Doctor
+                Secure Payment
               </span>
             </div>
           </div>
 
-          <div className="space-y-8 p-6 sm:p-8">
-            {/* Doctor Card */}
-            <div className="relative overflow-hidden rounded-2xl border border-indigo-100 bg-slate-50/50 p-5 sm:p-6 transition hover:border-indigo-200">
+          <div className="space-y-7 p-6 sm:p-8">
+
+            {/* EMERGENCY NOTICE */}
+
+            <div className="flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50/70 p-4">
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
+
+              <div>
+                <p className="text-sm font-bold text-rose-800">
+                  Emergency Consultation
+                </p>
+
+                <p className="mt-1 text-xs leading-relaxed text-rose-700">
+                  Enter the patient's details and estimated
+                  travel time. No appointment date or time-slot
+                  selection is required.
+                </p>
+              </div>
+            </div>
+
+            {/* DOCTOR CARD */}
+
+            <div className="relative overflow-hidden rounded-2xl border border-indigo-100 bg-slate-50/50 p-5 transition hover:border-indigo-200 sm:p-6">
               <div className="flex items-start gap-4">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-indigo-100/70 text-indigo-600">
                   <Stethoscope className="h-6 w-6" />
@@ -1161,9 +753,10 @@ export default function ClinicBookingPage() {
                     <h2 className="text-base font-bold text-slate-900 sm:text-lg">
                       {doctor.name}
                     </h2>
+
                     <span className="text-xs font-medium text-slate-500">
                       Fee:{" "}
-                      <strong className="text-indigo-600 text-sm font-bold">
+                      <strong className="text-sm font-bold text-indigo-600">
                         ₹{bookingCharge.toLocaleString("en-IN")}
                       </strong>
                     </span>
@@ -1179,303 +772,263 @@ export default function ClinicBookingPage() {
                     <p className="font-semibold text-slate-700">
                       {clinic.name}
                     </p>
-                    <p className="flex items-start gap-1 text-slate-500">
+
+                    <p className="flex items-start gap-1">
                       <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
                       {clinic.address}
                     </p>
                   </div>
 
                   <div className="mt-4 flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 border border-slate-200/60">
+                    <span className="inline-flex items-center gap-1 rounded-lg border border-slate-200/60 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
                       <Clock className="h-3 w-3 text-indigo-500" />
                       {doctor.duration || 30} mins
                     </span>
-                    <span className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 border border-slate-200/60">
-                      <User className="h-3 w-3 text-indigo-500" />
-                      In-clinic
+
+                    <span className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
+                      <Zap className="h-3 w-3" />
+                      Emergency
                     </span>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Patient Form */}
-            <div className="space-y-4">
+            {/* PATIENT DETAILS */}
+
+            <div className="space-y-5">
+
               <div>
-                <h3 className="text-sm font-bold tracking-tight text-slate-900 uppercase text-slate-400">
+                <h3 className="text-sm font-bold uppercase tracking-tight text-slate-400">
                   1. Patient Details
                 </h3>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  Enter the details of the patient requiring
+                  emergency consultation.
+                </p>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="sm:col-span-2">
-                  <label
-                    htmlFor="patientName"
-                    className="mb-1.5 block text-xs font-bold text-slate-700"
-                  >
-                    Patient Name
-                  </label>
+              {/* PATIENT NAME */}
+
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-gray-700">
+                  Patient Name *
+                </label>
+
+                <div className="relative">
+                  <User className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
                   <input
-                    id="patientName"
                     type="text"
                     value={patientName}
-                    onChange={(e) => {
-                      setPatientName(e.target.value);
-                      setError("");
-                    }}
-                    placeholder="Full name"
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
+                    onChange={(e) => setPatientName(e.target.value)}
+                    placeholder="Enter patient name"
+                    autoComplete="name"
+                    className="w-full rounded-xl border border-gray-200 bg-white py-3 pl-11 pr-4 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   />
                 </div>
+              </div>
 
+              {/* AGE AND PHONE */}
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label
-                    htmlFor="age"
-                    className="mb-1.5 block text-xs font-bold text-slate-700"
-                  >
-                    Age
+                  <label className="mb-2 block text-sm font-semibold text-gray-700">
+                    Age *
                   </label>
+
                   <input
-                    id="age"
                     type="number"
                     min="0"
                     max="120"
                     value={age}
-                    onChange={(e) => {
-                      setAge(e.target.value);
-                      setError("");
-                    }}
-                    placeholder="Age in years"
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
+                    onChange={(e) => setAge(e.target.value)}
+                    placeholder="Enter age"
+                    className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
                   />
                 </div>
 
                 <div>
-                  <label
-                    htmlFor="gender"
-                    className="mb-1.5 block text-xs font-bold text-slate-700"
-                  >
-                    Gender
+                  <label className="mb-2 block text-sm font-semibold text-gray-700">
+                    Phone Number *
                   </label>
-                  <select
-                    id="gender"
-                    value={gender}
-                    onChange={(e) => {
-                      setGender(e.target.value);
-                      setError("");
-                    }}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10"
-                  >
-                    <option value="">Select gender</option>
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                    <option value="Other">Other</option>
-                  </select>
+
+                  <div className="relative">
+                    <Phone className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      autoComplete="tel"
+                      maxLength={10}
+                      value={phone}
+                      onChange={(e) =>
+                        setPhone(
+                          e.target.value.replace(/\D/g, "").slice(0, 10)
+                        )
+                      }
+                      placeholder="10-digit mobile number"
+                      className="w-full rounded-xl border border-gray-200 bg-white py-3 pl-11 pr-4 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Date Selection Grid */}
-            <div className="space-y-4">
+              {/* GENDER */}
+
               <div>
-                <h3 className="text-sm font-bold tracking-tight text-slate-900 uppercase text-slate-400">
-                  2. Select Date
-                </h3>
-              </div>
+                <label className="mb-2 block text-sm font-semibold text-gray-700">
+                  Gender *
+                </label>
 
-              <div className="flex gap-2.5 overflow-x-auto pb-2 pt-1 scrollbar-thin">
-                {availableDates.map((date) => {
-                  const isSelected = appointmentDate === date.value;
-                  const isDisabled = date.isClosed;
-
-                  return (
+                <div className="grid grid-cols-3 gap-3">
+                  {["Male", "Female", "Other"].map((item) => (
                     <button
-                      key={date.value}
+                      key={item}
                       type="button"
-                      disabled={isDisabled}
-                      onClick={() => handleSelectDate(date.value)}
-                      className={`flex min-w-[76px] flex-col items-center justify-center rounded-2xl border px-3 py-3 text-center transition ${
-                        isDisabled
-                          ? "border-slate-100 bg-slate-50/80 text-slate-300 cursor-not-allowed"
-                          : isSelected
-                            ? "border-indigo-600 bg-indigo-600 text-white shadow-lg shadow-indigo-200 ring-2 ring-indigo-600 ring-offset-2"
-                            : "border-slate-200/80 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50/30"
+                      onClick={() => {
+                        setGender(item);
+                        setError("");
+                      }}
+                      className={`rounded-xl border px-3 py-3 text-sm font-semibold transition ${
+                        gender.toLowerCase() === item.toLowerCase()
+                          ? "border-indigo-600 bg-indigo-50 text-indigo-700"
+                          : "border-gray-200 bg-white text-gray-600 hover:border-indigo-300"
                       }`}
                     >
-                      <span
-                        className={`text-[10px] font-bold uppercase tracking-wider ${
-                          isSelected ? "text-indigo-100" : "text-slate-400"
-                        }`}
-                      >
-                        {date.dayName}
-                      </span>
-                      <span className="text-lg font-black my-0.5">
-                        {date.dayNumber}
-                      </span>
-                      <span
-                        className={`text-[10px] font-semibold ${
-                          isSelected ? "text-indigo-100" : "text-slate-500"
-                        }`}
-                      >
-                        {date.monthName}
-                      </span>
+                      {item}
                     </button>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
             </div>
 
-            {/* Time Slot Picker */}
+            {/* ARRIVAL TIME */}
+
             <div className="space-y-4">
               <div>
-                <h3 className="text-sm font-bold tracking-tight text-slate-900 uppercase text-slate-400">
-                  3. Select Time Block
+                <h3 className="text-sm font-bold uppercase tracking-tight text-slate-400">
+                  2. Estimated Arrival Time
                 </h3>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  How long will it take the patient to reach
+                  the clinic?
+                </p>
               </div>
 
-              {!appointmentDate ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
-                  <Clock className="mx-auto h-6 w-6 text-slate-300" />
-                  <p className="mt-2 text-xs font-semibold text-slate-500">
-                    Please select an appointment date above
-                  </p>
+              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 p-4 sm:p-5">
+                <div className="mb-4 flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600">
+                    <Timer className="h-5 w-5" />
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">
+                      Expected travel time
+                    </p>
+
+                    <p className="text-[11px] text-slate-500">
+                      Select an estimated arrival time
+                    </p>
+                  </div>
                 </div>
-              ) : !selectedDoctorSchedule?.active ||
-                !selectedDoctorSchedule?.slots?.length ? (
-                <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-5 text-center">
-                  <AlertCircle className="mx-auto h-5 w-5 text-rose-500" />
-                  <p className="mt-1 text-xs font-bold text-rose-700">
-                    Doctor Unavailable
-                  </p>
-                  <p className="text-[11px] text-rose-600">
-                    The doctor does not hold consultations on this day.
-                  </p>
-                </div>
-              ) : loadingBookings ? (
-                <div className="rounded-2xl border border-slate-200/80 bg-slate-50/50 p-6 text-center">
-                  <LoaderCircle className="mx-auto h-6 w-6 animate-spin text-indigo-600" />
-                  <p className="mt-2 text-xs font-semibold text-slate-500">
-                    Checking available slot capacities...
-                  </p>
-                </div>
-              ) : bookingsError ? (
-                <div className="rounded-2xl border border-rose-100 bg-rose-50/50 p-5 text-center">
-                  <p className="text-xs font-bold text-rose-700">
-                    Failed to fetch capacity counts
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setBookingRefreshKey((k) => k + 1)}
-                    className="mt-2 text-xs font-semibold text-rose-700 underline"
-                  >
-                    Retry
-                  </button>
-                </div>
-              ) : availableTimes.length === 0 ? (
-                <div className="rounded-2xl border border-amber-200/80 bg-amber-50/50 p-5 text-center">
-                  <Clock className="mx-auto h-5 w-5 text-amber-500" />
-                  <p className="mt-1 text-xs font-bold text-amber-800">
-                    All Slots Closed
-                  </p>
-                  <p className="text-[11px] text-amber-700">
-                    There are no active consultation blocks remaining for this date.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {availableTimes.map((slot) => {
-                    const isSelected = appointmentTime === slot.open;
-                    const isDisabled = !slot.configured || slot.isFull;
+
+                <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4">
+                  {ARRIVAL_OPTIONS.map((mins) => {
+                    const isSelected =
+                      Number(arrivalTime) === mins;
 
                     return (
                       <button
-                        key={slot.id}
+                        key={mins}
                         type="button"
-                        disabled={isDisabled}
                         onClick={() => {
-                          setAppointmentTime(slot.open);
+                          setArrivalTime(String(mins));
                           setError("");
                         }}
-                        className={`group relative rounded-2xl border p-4 text-left transition ${
-                          isDisabled
-                            ? "border-slate-200/60 bg-slate-50 text-slate-400 cursor-not-allowed opacity-75"
-                            : isSelected
-                              ? "border-indigo-600 bg-indigo-600 text-white shadow-md shadow-indigo-100 ring-2 ring-indigo-600 ring-offset-1"
-                              : "border-slate-200 bg-white text-slate-800 hover:border-indigo-300 hover:bg-indigo-50/30"
+                        className={`rounded-xl border px-3 py-3 text-sm font-bold transition ${
+                          isSelected
+                            ? "border-indigo-600 bg-indigo-600 text-white shadow-md shadow-indigo-200"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50"
                         }`}
                       >
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-bold tracking-tight">
-                            {slot.label}
-                          </span>
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                              isDisabled
-                                ? "bg-rose-100 text-rose-700"
-                                : isSelected
-                                  ? "bg-white/20 text-white"
-                                  : slot.remaining <= 2
-                                    ? "bg-amber-100 text-amber-800"
-                                    : "bg-emerald-100 text-emerald-800"
-                            }`}
-                          >
-                            {!slot.configured
-                              ? "Unavailable"
-                              : slot.isFull
-                                ? "Full"
-                                : `${slot.remaining} left`}
-                          </span>
-                        </div>
-
-                        <div className="mt-2 flex items-center justify-between text-xs">
-                          <span
-                            className={`font-medium ${
-                              isSelected ? "text-indigo-100" : "text-slate-500"
-                            }`}
-                          >
-                            Capacity
-                          </span>
-                          <span
-                            className={`font-bold ${
-                              isSelected ? "text-white" : "text-slate-700"
-                            }`}
-                          >
-                            {slot.configured
-                              ? `${Math.min(slot.bookedCount, slot.capacity)}/${slot.capacity}`
-                              : "N/A"}
-                          </span>
-                        </div>
+                        {mins} min
                       </button>
                     );
                   })}
                 </div>
-              )}
-            </div>
 
-            {/* Selected Booking Summary */}
-            {appointmentDate && appointmentTime && selectedSlot && (
-              <div className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50/80 to-white p-4 sm:p-5">
-                <div className="flex items-start gap-3">
-                  <CheckCircle2 className="mt-0.5 h-5 w-5 text-indigo-600 shrink-0" />
-                  <div className="space-y-1">
-                    <p className="text-xs font-bold uppercase tracking-wider text-indigo-600">
-                      Summary
-                    </p>
-                    <p className="text-sm font-bold text-slate-900">
-                      {formatDate(appointmentDate)} ({formatTime(appointmentTime)})
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      Amount Payable:{" "}
-                      <strong className="text-slate-800 font-bold">
-                        ₹{bookingCharge.toLocaleString("en-IN")}
-                      </strong>
+                {arrivalTime && (
+                  <div className="mt-4 flex items-center gap-2 rounded-xl border border-indigo-100 bg-white p-3">
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-indigo-600" />
+
+                    <p className="text-xs font-semibold text-slate-700">
+                      Patient expects to reach the clinic in{" "}
+                      <span className="text-indigo-600">
+                        {arrivalTime} minutes
+                      </span>.
                     </p>
                   </div>
-                </div>
+                )}
               </div>
-            )}
+            </div>
 
-            {/* Validation Error Banner */}
+            {/* BOOKING SUMMARY */}
+
+            {patientName.trim() &&
+              age !== "" &&
+              phone &&
+              gender &&
+              arrivalTime && (
+                <div className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50/80 to-white p-4 sm:p-5">
+                  <div className="flex items-start gap-3">
+                    <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-indigo-600" />
+
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <p className="text-xs font-bold uppercase tracking-wider text-indigo-600">
+                        Emergency Booking Summary
+                      </p>
+
+                      <p className="text-sm font-bold text-slate-900">
+                        {patientName.trim()}
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs text-slate-600">
+                        <p>
+                          Age: <strong>{age}</strong>
+                        </p>
+
+                        <p>
+                          Gender: <strong>{gender}</strong>
+                        </p>
+
+                        <p className="col-span-2">
+                          Phone: <strong>{phone}</strong>
+                        </p>
+
+                        <p className="col-span-2">
+                          Expected arrival:{" "}
+                          <strong className="text-indigo-600">
+                            {arrivalTime} minutes
+                          </strong>
+                        </p>
+                      </div>
+
+                      <div className="border-t border-indigo-100 pt-2 text-xs text-slate-500">
+                        Amount payable:{" "}
+                        <strong className="font-bold text-slate-900">
+                          ₹{bookingCharge.toLocaleString("en-IN")}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+            {/* ERROR */}
+
             {error && (
               <div
                 role="alert"
@@ -1486,16 +1039,13 @@ export default function ClinicBookingPage() {
               </div>
             )}
 
-            {/* Submit & Pay Button */}
+            {/* PAYMENT BUTTON */}
+
             <button
               type="button"
               onClick={handlePayment}
               disabled={
-                isPageLoading ||
                 isPaying ||
-                loadingBookings ||
-                !!bookingsError ||
-                isSlotUnavailable ||
                 !clinic ||
                 !doctor ||
                 !normalizedDoctorId ||
@@ -1504,36 +1054,32 @@ export default function ClinicBookingPage() {
                 !Number.isInteger(Number(age)) ||
                 Number(age) < 0 ||
                 Number(age) > 120 ||
+                !/^[6-9]\d{9}$/.test(phone) ||
                 !gender ||
+                !arrivalTime ||
                 !Number.isFinite(bookingCharge) ||
                 bookingCharge <= 0
               }
-              className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-indigo-600 px-6 py-4 text-sm font-bold text-white shadow-lg shadow-indigo-200 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+              className="flex w-full items-center justify-center gap-2.5 rounded-2xl bg-rose-600 px-6 py-4 text-sm font-bold text-white shadow-lg shadow-rose-200 transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
             >
               {isPaying ? (
                 <>
                   <LoaderCircle className="h-5 w-5 animate-spin" />
                   Processing Payment...
                 </>
-              ) : loadingBookings ? (
-                <>
-                  <LoaderCircle className="h-5 w-5 animate-spin" />
-                  Checking Slot Availability...
-                </>
-              ) : isSlotUnavailable ? (
-                <>
-                  <Clock className="h-5 w-5" />
-                  {!appointmentDate || !appointmentTime
-                    ? "Select Date & Time"
-                    : "Slot Full / Unavailable"}
-                </>
               ) : (
                 <>
-                  <CheckCircle2 className="h-5 w-5" />
-                  Pay ₹{bookingCharge.toLocaleString("en-IN")} & Confirm
+                  <Zap className="h-5 w-5" />
+                  Pay ₹{bookingCharge.toLocaleString("en-IN")} & Confirm Emergency Booking
                 </>
               )}
             </button>
+
+            <p className="text-center text-[10px] leading-relaxed text-slate-400">
+              Your emergency booking will be confirmed only
+              after successful payment verification.
+            </p>
+
           </div>
         </div>
       </section>

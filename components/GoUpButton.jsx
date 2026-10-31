@@ -28,13 +28,13 @@ export default function GoUpButton() {
   if (!show) return null;
 
   return (
-    <button
-      type="button"
-      onClick={goToTop}
-      aria-label="Go to top"
-      className="fixed bottom-8 right-8 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-slate-500 hover:bg-slate-600 text-white shadow-lg transition-all duration-200 hover:scale-105 active:scale-95 sm:bottom-10 sm:right-10"
-    >
-      <ArrowUp size={22} />
-    </button>
+<button
+  type="button"
+  onClick={goToTop}
+  aria-label="Go to top"
+  className="fixed bottom-5 right-5 z-50 flex h-11 w-11 items-center justify-center rounded-full bg-slate-600 text-white shadow-lg transition-all duration-200 hover:scale-105 hover:bg-slate-700 active:scale-95 sm:bottom-6 sm:left-1/2 sm:right-auto sm:-translate-x-1/2"
+>
+  <ArrowUp size={22} />
+</button>
   );
 }

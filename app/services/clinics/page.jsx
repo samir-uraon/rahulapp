@@ -15,6 +15,9 @@ import {
   Clock,
   Stethoscope,
   Loader2,
+  Users,
+  ArrowRight,
+  Zap
 } from "lucide-react";
 
 // Persistent memory cache across re-renders
@@ -1034,198 +1037,331 @@ export default function ClinicsPage() {
           </div>
         ) : (
           /* 4. RENDER CLINICS DATA LIST */
-          <div className="space-y-4">
-            {filteredClinics.map((clinic) => (
-              <div
-                key={clinic._id}
-                className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition-all duration-200 hover:border-indigo-200 hover:shadow-md sm:p-5"
+      
+
+ 
+<div className="space-y-5">
+  {filteredClinics.map((clinic) => (
+    <div
+      key={clinic._id}
+      className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm transition-all duration-200 hover:border-indigo-200 hover:shadow-md"
+    >
+      {/* Clinic Header */}
+      <div className="p-4 sm:p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-bold tracking-tight text-gray-900">
+                {clinic.name}
+              </h3>
+
+              {clinic.rating && (
+                <span className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">
+                  <Star size={12} fill="currentColor" />
+                  {clinic.rating}
+                </span>
+              )}
+
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                  clinic.clinicStatus?.isOpen
+                    ? "bg-green-50 text-green-700"
+                    : "bg-red-50 text-red-600"
+                }`}
               >
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-base font-bold text-gray-900 sm:text-lg">
-                        {clinic.name}
-                      </h3>
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    clinic.clinicStatus?.isOpen
+                      ? "bg-green-500"
+                      : "bg-red-500"
+                  }`}
+                />
+                {clinic.clinicStatus?.status}
+              </span>
+            </div>
 
-                      {clinic.rating && (
-                        <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
-                          ★ {clinic.rating}
-                        </span>
-                      )}
+            {/* Address */}
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div className="flex min-w-0 items-center gap-1.5 text-xs text-gray-500">
+                <MapPin size={14} className="shrink-0 text-red-500" />
+                <span>{clinic.address}</span>
+              </div>
 
-                      <span
-                        className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                          clinic.clinicStatus?.isOpen
-                            ? "bg-green-50 text-green-700"
-                            : "bg-red-50 text-red-600"
-                        }`}
-                      >
-                        {clinic.clinicStatus?.status}
-                      </span>
+              {clinic.distance !== null &&
+                clinic.distance !== undefined && (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-[10px] font-semibold text-gray-600">
+                    <MapPin size={10} />
+                    {clinic.distance < 1
+                      ? `${Math.round(clinic.distance * 1000)} m away`
+                      : `${clinic.distance.toFixed(1)} km away`}
+                  </span>
+                )}
+            </div>
+
+            {/* Clinic Stats */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <div className="inline-flex items-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50/70 px-3 py-2">
+                <Stethoscope size={15} className="text-indigo-600" />
+                <div>
+                  <p className="text-xs font-bold text-indigo-800">
+                    {clinic.doctors?.length || 0}{" "}
+                    {clinic.doctors?.length === 1 ? "Doctor" : "Doctors"}
+                  </p>
+                </div>
+              </div>
+
+              <div
+                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 ${
+                  clinic.clinicStatus?.isOpen
+                    ? "border-green-100 bg-green-50/70"
+                    : "border-red-100 bg-red-50/70"
+                }`}
+              >
+                <Clock
+                  size={15}
+                  className={
+                    clinic.clinicStatus?.isOpen
+                      ? "text-green-600"
+                      : "text-red-500"
+                  }
+                />
+                <p
+                  className={`text-xs font-semibold ${
+                    clinic.clinicStatus?.isOpen
+                      ? "text-green-800"
+                      : "text-red-700"
+                  }`}
+                >
+                  {clinic.clinicStatus?.timeText}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* View Clinic Button */}
+          <Link
+            href={`/services/clinics/${clinic._id}`}
+            className="inline-flex h-10 w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 text-xs font-bold text-white shadow-sm transition-all hover:bg-indigo-700 hover:shadow-md active:scale-[0.98] sm:w-auto"
+          >
+            View Doctors
+            <ChevronRight size={15} />
+          </Link>
+        </div>
+      </div>
+
+      {/* Doctor Section */}
+      <div className="border-t border-gray-100 bg-gray-50/70 p-4 sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div>
+            <h4 className="text-sm font-bold text-gray-800">
+              Available Doctors
+            </h4>
+            <p className="mt-0.5 text-[10px] text-gray-400">
+              Check live queues and appointment slots
+            </p>
+          </div>
+
+          <span className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-[10px] font-semibold text-gray-500">
+            {clinic.doctorsWithStatus?.length || 0} Listed
+          </span>
+        </div>
+
+        {clinic.doctorsWithStatus?.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            {clinic.doctorsWithStatus.map((doctor) => (
+              <div
+                key={getDoctorId(doctor)}
+                className="min-w-0 rounded-xl border border-gray-200 bg-white p-3.5 transition-all hover:border-indigo-100 hover:shadow-sm sm:p-4"
+              >
+                {/* Doctor Header */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <div
+                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                        doctor.status?.isOpen
+                          ? "bg-green-50 text-green-600"
+                          : "bg-gray-100 text-gray-500"
+                      }`}
+                    >
+                      <Stethoscope size={17} />
                     </div>
 
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-500">
-                      <div className="flex items-center gap-1.5">
-                        <MapPin size={16} className="shrink-0 text-red-500" />
-                        <span>{clinic.address}</span>
-                      </div>
-
-                      {clinic.distance !== null && (
-                        <span className="rounded-full border border-gray-200 bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
-                          {clinic.distance < 1
-                            ? `${Math.round(clinic.distance * 1000)} m away`
-                            : `${clinic.distance.toFixed(1)} km away`}
-                        </span>
-                      )}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-gray-900">
+                        {doctor.name}
+                      </p>
+                      <p className="truncate text-[11px] text-gray-500">
+                        {doctor.specialization || "General Physician"}
+                      </p>
                     </div>
+                  </div>
 
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <div className="inline-flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700">
-                        <Stethoscope size={15} />
-                        <span>
-                          {clinic.doctors?.length || 0}{" "}
-                          {clinic.doctors?.length === 1 ? "Doctor" : "Doctors"}
-                        </span>
-                      </div>
+                  <span
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-[9px] font-bold ${
+                      doctor.status?.isOpen
+                        ? "bg-green-50 text-green-700"
+                        : "bg-gray-100 text-gray-500"
+                    }`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        doctor.status?.isOpen
+                          ? "bg-green-500"
+                          : "bg-gray-400"
+                      }`}
+                    />
+                    {doctor.status?.status}
+                  </span>
+                </div>
 
-                      <div
-                        className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                          clinic.clinicStatus?.isOpen
-                            ? "bg-green-50 text-green-700"
-                            : "bg-red-50 text-red-600"
-                        }`}
-                      >
-                        <Clock size={15} />
-                        <span>{clinic.clinicStatus?.timeText}</span>
-                      </div>
-                    </div>
+                {/* Doctor Slots */}
+                {doctor.slotQueues?.length > 0 ? (
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {doctor.slotQueues.map(({ slot, queueInfo }) => {
+                      const isCurrentSlot =
+                        doctor.activeSlot?.open === slot.open &&
+                        doctor.activeSlot?.close === slot.close;
 
-                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      {clinic.doctorsWithStatus?.map((doctor) => (
+                      return (
                         <div
-                          key={getDoctorId(doctor)}
-                          className="rounded-xl border border-gray-100 bg-gray-50 p-3"
+                          key={getSlotKey(slot)}
+                          className={`min-w-0 rounded-xl border p-3 transition-all ${
+                            isCurrentSlot
+                              ? "border-green-200 bg-green-50/60"
+                              : "border-gray-100 bg-gray-50/70 hover:border-indigo-200"
+                          }`}
                         >
+                          {/* Slot Time */}
                           <div className="flex items-center justify-between gap-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <span
-                                className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-                                  doctor.status?.isOpen
-                                    ? "bg-green-500"
-                                    : "bg-gray-400"
-                                }`}
+                            <div className="flex items-center gap-1.5">
+                              <Clock
+                                size={13}
+                                className={
+                                  isCurrentSlot
+                                    ? "text-green-600"
+                                    : "text-gray-400"
+                                }
                               />
-                              <p className="truncate text-xs font-bold text-gray-800">
-                                {doctor.name}
-                              </p>
+                              <span className="text-[11px] font-bold text-gray-700">
+                                {formatTime(slot.open)} -{" "}
+                                {formatTime(slot.close)}
+                              </span>
                             </div>
 
-                            <span className="max-w-[120px] truncate text-[11px] font-medium text-gray-500">
-                              {doctor.specialization}
-                            </span>
+                            {isCurrentSlot && (
+                              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-green-100 px-1.5 py-0.5 text-[8px] font-bold text-green-700">
+                                <span className="h-1 w-1 animate-pulse rounded-full bg-green-600" />
+                                NOW
+                              </span>
+                            )}
                           </div>
 
-                          {doctor.slotQueues?.length > 0 ? (
-                            <div className="mt-2 space-y-1.5">
-                              {doctor.slotQueues.map(({ slot, queueInfo }) => {
-                                const isCurrentSlot =
-                                  doctor.activeSlot?.open === slot.open &&
-                                  doctor.activeSlot?.close === slot.close;
+                          {/* Queue Status */}
+                          <div className="mt-3 flex items-center justify-between gap-2">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <div
+                                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                                  queueInfo.peopleAhead > 0
+                                    ? "bg-orange-100 text-orange-600"
+                                    : "bg-green-100 text-green-600"
+                                }`}
+                              >
+                                <Users size={13} />
+                              </div>
 
-                                return (
-                                  <div
-                                    key={getSlotKey(slot)}
-                                    className={`rounded-lg border px-2.5 py-2 ${
-                                      isCurrentSlot
-                                        ? "border-green-200 bg-green-50/60"
-                                        : "border-gray-200 bg-white"
-                                    }`}
-                                  >
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-[11px] font-medium text-gray-600">
-                                        {formatTime(slot.open)} - {formatTime(slot.close)}
-                                      </span>
-
-                                      {isCurrentSlot && (
-                                        <span className="rounded bg-green-600 px-1.5 py-0.5 text-[9px] font-bold text-white">
-                                          NOW
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    <div className="mt-1 flex items-center justify-between gap-2">
-                                      <p
-                                        className={`text-[11px] font-semibold ${
-                                          queueInfo.peopleAhead > 0
-                                            ? "text-orange-600"
-                                            : "text-green-600"
-                                        }`}
-                                      >
-                                        {queueInfo.peopleAhead === 0
-                                          ? "No one ahead"
-                                          : `${queueInfo.peopleAhead} ${
-                                              queueInfo.peopleAhead === 1
-                                                ? "person"
-                                                : "people"
-                                            } ahead`}
-                                      </p>
-
-                                      {isCurrentSlot &&
-                                        doctor.status?.isOpen &&
-                                        !doctor.status?.isHoliday && (
-                                          <Link
-                                            href={`/services/clinics/${clinic._id}/emergency?doctor=${encodeURIComponent(
-                                              getDoctorId(doctor)
-                                            )}`}
-                                            className="rounded-md bg-red-600 px-2.5 py-1.5 text-[10px] font-bold text-white transition hover:bg-red-700 active:scale-95"
-                                          >
-                                            Emergency Book
-                                          </Link>
-                                        )}
-
-                                      <span className="text-[10px] text-gray-400">
-                                        {queueInfo.total}/{queueInfo.capacity} booked
-                                      </span>
-                                    </div>
-
-                                    {isCurrentSlot && queueInfo.serving && (
-                                      <div className="mt-1.5 text-[10px] font-medium text-green-700">
-                                        Serving: {queueInfo.serving?.patient?.name}
-                                      </div>
-                                    )}
-
-                                    {isCurrentSlot &&
-                                      queueInfo.estimatedWait > 0 && (
-                                        <div className="mt-1 text-[10px] font-medium text-gray-500">
-                                          Estimated wait: {queueInfo.estimatedWait} min
-                                        </div>
-                                      )}
-                                  </div>
-                                );
-                              })}
+                              <div className="min-w-0">
+                                <p
+                                  className={`truncate text-[11px] font-bold ${
+                                    queueInfo.peopleAhead > 0
+                                      ? "text-orange-600"
+                                      : "text-green-600"
+                                  }`}
+                                >
+                                  {queueInfo.peopleAhead === 0
+                                    ? "No one ahead"
+                                    : `${queueInfo.peopleAhead} ${
+                                        queueInfo.peopleAhead === 1
+                                          ? "person"
+                                          : "people"
+                                      } ahead`}
+                                </p>
+                                <p className="text-[9px] text-gray-400">
+                                  {queueInfo.total}/{queueInfo.capacity} booked
+                                </p>
+                              </div>
                             </div>
-                          ) : (
-                            <p className="mt-2 text-[11px] font-medium text-red-500">
-                              {doctor.status?.status}
-                            </p>
+
+                            {/* Emergency Button */}
+                            {isCurrentSlot &&
+                              doctor.status?.isOpen &&
+                              !doctor.status?.isHoliday &&
+                              doctor.isEmergency !== true && (
+                                <Link
+                                  href={`/services/clinics/${clinic._id}/emergency?doctor=${encodeURIComponent(
+                                    getDoctorId(doctor)
+                                  )}`}
+                                  className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-red-600 px-2.5 py-2 text-[9px] font-bold text-white shadow-sm transition-all hover:bg-red-700 active:scale-95"
+                                >
+                                  <Zap size={11} />
+                                  Emergency
+                                </Link>
+                              )}
+                          </div>
+
+                          {/* Currently Serving */}
+                          {isCurrentSlot && queueInfo.serving && (
+                            <div className="mt-2 flex items-center gap-2 rounded-lg border border-green-100 bg-white/80 px-2 py-1.5">
+                              <Activity
+                                size={12}
+                                className="shrink-0 text-green-600"
+                              />
+                              <p className="min-w-0 truncate text-[10px] text-green-700">
+                                <span className="font-semibold">
+                                  Serving:
+                                </span>{" "}
+                                {getPriorityRank(queueInfo.serving) === 0
+                                  ? "Emergency Patient"
+                                  : queueInfo.serving?.patient?.name ||
+                                    "Patient"}
+                              </p>
+                            </div>
                           )}
                         </div>
-                      ))}
-                    </div>
+                      );
+                    })}
                   </div>
-
-                  <div className="w-full lg:w-auto lg:shrink-0 lg:self-center">
-                    <Link
-                      href={`/services/clinics/${clinic._id}`}
-                      className="flex h-11 w-full items-center justify-center rounded-xl bg-indigo-600 px-5 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-indigo-700 hover:shadow-md active:scale-[0.98] lg:w-auto"
-                    >
-                      View Doctors <span className="ml-2">→</span>
-                    </Link>
+                ) : (
+                  <div className="mt-3 rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-center">
+                    <Clock
+                      size={17}
+                      className="mx-auto text-gray-400"
+                    />
+                    <p className="mt-1 text-[11px] font-medium text-gray-500">
+                      {doctor.status?.status || "No active appointment slots"}
+                    </p>
                   </div>
-                </div>
+                )}
               </div>
             ))}
           </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-gray-200 bg-white px-4 py-7 text-center">
+            <Stethoscope
+              size={22}
+              className="mx-auto text-gray-300"
+            />
+            <p className="mt-2 text-xs font-semibold text-gray-600">
+              No doctors listed
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  ))}
+</div>
+
+
+
         )}
       </section>
 

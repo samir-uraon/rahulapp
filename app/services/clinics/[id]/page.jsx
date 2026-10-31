@@ -20,6 +20,7 @@ import {
   X,
   Clock,
   Users,
+   AlertCircle
 } from "lucide-react";
 
 async function calculateDistance(lat1, lng1, lat2, lng2) {
@@ -679,6 +680,7 @@ const [distanceLoading, setDistanceLoading] = useState(false);
         }
 
         const data = await response.json();
+ 
 
         if (!data.success || !data.clinic || typeof data.clinic !== "object") {
           throw new Error(data.message || "Invalid clinic response");
@@ -745,6 +747,28 @@ const [distanceLoading, setDistanceLoading] = useState(false);
     };
   }, [status, clinicId, clinicCacheKey]);
 
+
+const handleEmergencyBooking = (doctor) => {
+  const doctorId = getDoctorId(doctor);
+  const currentClinicId = String(
+    clinic?._id || clinic?.id || ""
+  );
+
+  if (!doctorId || !currentClinicId) {
+    console.error("Missing clinic ID or doctor ID");
+    return;
+  }
+
+  if (doctor.isEmergency === true) {
+    return;
+  }
+
+  router.push(
+    `/services/clinics/${encodeURIComponent(
+      currentClinicId
+    )}/emergency?doctor=${encodeURIComponent(doctorId)}`
+  );
+};
 
 useEffect(() => {
   try {
@@ -892,16 +916,17 @@ useEffect(() => {
       const doctorId = getDoctorId(doctor);
 
       const normalizedDoctor = {
-        ...doctor,
-        _id: doctorId,
-        id: doctorId,
-        name: doctor.name || "Doctor",
-        profileImage: doctor.profileImage || "",
-        schedule: doctor.schedule || {},
-        bookings: Array.isArray(doctor.bookings)
-          ? doctor.bookings
-          : [],
-      };
+  ...doctor,
+  _id: doctorId,
+  id: doctorId,
+  name: doctor.name || "Doctor",
+  profileImage: doctor.profileImage || "",
+  schedule: doctor.schedule || {},
+  isEmergency: doctor.isEmergency === true,
+  bookings: Array.isArray(doctor.bookings)
+    ? doctor.bookings
+    : [],
+};
 
 
 
@@ -1230,81 +1255,93 @@ useEffect(() => {
                                   const isFinished = queueInfo.isFinished;
 
                                   return (
-                                    <div
-                                      key={`${slot.open}-${slot.close}-${index}`}
-                                      className={`rounded-xl border p-3.5 ${
-                                        isCurrentActiveSlot
-                                          ? "border-emerald-200 bg-emerald-50/40"
-                                          : "border-gray-200 bg-gray-50/50"
-                                      }`}
-                                    >
-                                      <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <span className="text-sm font-bold text-gray-800">
-                                            {formatSlotTime(slot.open)} -{" "}
-                                            {formatSlotTime(slot.close)}
-                                          </span>
+                                  <div
+  key={`${slot.open}-${slot.close}-${index}`}
+  className={`rounded-xl border p-3.5 ${
+    isCurrentActiveSlot
+      ? "border-emerald-200 bg-emerald-50/40"
+      : "border-gray-200 bg-gray-50/50"
+  }`}
+>
+  <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-sm font-bold text-gray-800">
+        {formatSlotTime(slot.open)} - {formatSlotTime(slot.close)}
+      </span>
 
-                                          {isCurrentActiveSlot && (
-                                            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-emerald-700">
-                                              NOW
-                                            </span>
-                                          )}
-                                        </div>
+      {isCurrentActiveSlot && (
+        <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-emerald-700">
+          NOW
+        </span>
+      )}
+    </div>
 
-                                        <span
-                                          className={`shrink-0 text-right text-xs font-bold sm:text-sm ${
-                                            queueInfo.peopleAhead > 0
-                                              ? "text-orange-600"
-                                              : "text-emerald-600"
-                                          }`}
-                                        >
-                                          {queueInfo.peopleAhead === 0
-                                            ? "No one ahead"
-                                            : `${queueInfo.peopleAhead} ${
-                                                queueInfo.peopleAhead === 1
-                                                  ? "person"
-                                                  : "people"
-                                              } ahead`}
-                                        </span>
-                                      </div>
+    <span
+      className={`shrink-0 text-right text-xs font-bold sm:text-sm ${
+        queueInfo.peopleAhead > 0
+          ? "text-orange-600"
+          : "text-emerald-600"
+      }`}
+    >
+      {queueInfo.peopleAhead === 0
+        ? "No one ahead"
+        : `${queueInfo.peopleAhead} ${
+            queueInfo.peopleAhead === 1 ? "person" : "people"
+          } ahead`}
+    </span>
+  </div>
 
-                                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-gray-200/70 pt-2">
-                                        <span className="text-xs font-medium text-gray-500">
-                                          {slotLabel}
-                                        </span>
+  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-gray-200/70 pt-2">
+    <span className="text-xs font-medium text-gray-500">
+      {slotLabel}
+    </span>
 
-                                        <span className="text-xs font-semibold text-gray-500">
-                                          {queueInfo.total}/{queueInfo.capacity} booked
-                                        </span>
-                                      </div>
+    <span className="text-xs font-semibold text-gray-500">
+      {queueInfo.total}/{queueInfo.capacity} booked
+    </span>
+  </div>
 
-                                      {isCurrentActiveSlot && queueInfo.serving && (
-                                        <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-700">
-                                          <Users className="h-3.5 w-3.5" />
-                                          Serving:{" "}
-                                          {queueInfo.serving.patient?.name ||
-                                            queueInfo.serving.patientName ||
-                                            "Current patient"}
-                                        </div>
-                                      )}
+  {isCurrentActiveSlot && queueInfo.serving && (
+    <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+      <Users className="h-3.5 w-3.5" />
+      Serving:{" "}
+      {getPriorityRank(queueInfo.serving) === 0
+  ? "Emergency Patient"
+  : queueInfo.serving.patient?.name ||
+    queueInfo.serving.patientName ||
+    "Current patient"}
+    </div>
+  )}
 
-                                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700">
-                                          <Clock className="h-3.5 w-3.5" />
-                                          {isFinished
-                                            ? "Slot ended"
-                                            : "Slot Open"}
-                                        </span>
+  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+    <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700">
+      <Clock className="h-3.5 w-3.5" />
+      {isFinished ? "Slot ended" : "Slot Open"}
+    </span>
 
-                                        {isCurrentActiveSlot &&
-                                          queueInfo.estimatedWait > 0 && (
-                                            <span className="text-[11px] font-medium text-gray-500">
-                                              Approx. {queueInfo.estimatedWait} min
-                                            </span>
-                                          )}
-                                      </div>
-                                    </div>
+    <div className="flex flex-wrap items-center gap-2">
+      {isCurrentActiveSlot && queueInfo.estimatedWait > 0 && (
+        <span className="text-[11px] font-medium text-gray-500">
+          Approx. {queueInfo.estimatedWait} min
+        </span>
+      )}
+
+      {!isFinished &&
+  isCurrentActiveSlot &&
+  doctor.status.isOpen &&
+  doctor.isEmergency !== true && (
+        <button
+  type="button"
+  onClick={() => handleEmergencyBooking(doctor)}
+  className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-red-700 active:scale-95"
+>
+  <AlertCircle className="h-3.5 w-3.5" />
+  Emergency Book
+</button>
+      )}
+    </div>
+  </div>
+</div>
                                   );
                                 }
                               )}
