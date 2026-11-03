@@ -38,7 +38,7 @@ export async function GET(request) {
       method: "GET",
       headers: {
         Accept: "application/json",
-        "User-Agent": "Zeric/1.0 (location-service)",
+        "User-Agent": "Zeriy/1.0 (location-service)",
       },
       signal: AbortSignal.timeout(12000),
       cache: "no-store",

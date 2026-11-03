@@ -14,11 +14,11 @@ export default function ServiceCard({
 }) {
   const cardContent = (
     <div
-      className={`group block bg-white border-2 rounded-3xl px-5 py-5 transition-all duration-200 ${
-        disabled
-          ? "border-gray-200 opacity-70 cursor-not-allowed"
-          : "border-gray-200 hover:border-indigo-200 hover:shadow-md cursor-pointer"
-      }`}
+className={`group block bg-white border-2 rounded-3xl px-5 py-5 transition-all duration-200 ${
+  disabled
+    ? "border-gray-200 opacity-70 cursor-not-allowed"
+    : "border-gray-200 hover:border-indigo-200 hover:shadow-md cursor-pointer active:scale-[0.98] active:shadow-sm"
+}`}
     >
       <div className="flex items-start gap-4">
         {/* Icon */}
@@ -73,5 +73,12 @@ export default function ServiceCard({
   }
 
   // Active services remain navigable.
-  return <Link href={href}>{cardContent}</Link>;
+return (
+  <Link
+    href={href}
+    className="block rounded-3xl focus-visible:outline-2 focus-visible:outline-indigo-500 focus-visible:outline-offset-4"
+  >
+    {cardContent}
+  </Link>
+);
 }

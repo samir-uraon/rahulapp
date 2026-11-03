@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { toast } from "react-hot-toast";
+import { ArrowLeft } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 export default function Login() {
   const [formData, setFormData] = useState({
@@ -11,6 +13,7 @@ export default function Login() {
   });
 
   const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -25,7 +28,7 @@ export default function Login() {
   const validateIdentifier = (value) => {
     const identifier = value.trim();
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const mobileRegex = /^[6-9]\d{9}$/;
 
     return (
@@ -55,45 +58,73 @@ export default function Login() {
       return;
     }
 
+  
+
     setLoading(true);
 
-    try {
-      const result = await signIn("credentials", {
-        identifier,
-        password: formData.password,
-        redirect: false,
-      });
+  try {
+  const result = await signIn("credentials", {
+    identifier,
+    password: formData.password,
+    redirect: false,
+  });
 
-      if (result?.error) {
-        toast.error("Invalid email/phone or password");
-        setLoading(false);
-        return;
-      }
+  if (result?.error) {
+    // Check whether the account needs email verification
+    if (result.error === "EMAIL_NOT_VERIFIED") {
+      toast.error("Please verify your email first.");
 
-      if (result?.ok) {
-        toast.success("Login successful!");
-        window.location.href = "/";
-      }
-    } catch (error) {
-      console.error("Login error:", error);
-      toast.error("Something went wrong.");
-      setLoading(false);
+      router.push(
+        `/verify-otp?email=${encodeURIComponent(identifier.trim().toLowerCase())}`
+      );
+
+      return;
     }
+
+    // Account expired
+    if (result.error === "ACCOUNT_EXPIRED") {
+      toast.error("Your unverified account has expired. Please create a new account.");
+
+      router.push("/signup");
+      return;
+    }
+
+    toast.error("Invalid email/phone or password");
+    setLoading(false);
+    return;
+  }
+
+  if (result?.ok) {
+    toast.success("Login successful!");
+    window.location.href = "/";
+  }
+} catch (error) {
+  console.error("Login error:", error);
+  toast.error("Something went wrong.");
+  setLoading(false);
+}
   };
 
-  const handleGoogleLogin = async () => {
-    setLoading(true);
+const handleGoogleLogin = async () => {
+  setLoading(true);
 
-    try {
-      await signIn("google", {
-        callbackUrl: "/",
-      });
-    } catch (error) {
-      console.error("Google login error:", error);
-      toast.error("Google login failed.");
-      setLoading(false);
+  try {
+    // If login page is running inside the ZERIY React Native app
+    if (window.ReactNativeWebView) {
+      window.ReactNativeWebView.postMessage("ZERIY_GOOGLE_LOGIN");
+      return;
     }
-  };
+
+    // Normal website browser login
+    await signIn("google", {
+      callbackUrl: "/",
+    });
+  } catch (error) {
+    console.error("Google login error:", error);
+    toast.error("Google login failed.");
+    setLoading(false);
+  }
+};
 
   const handleBack = () => {
     window.location.href = "/";
@@ -103,17 +134,30 @@ export default function Login() {
     <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 sm:py-8">
       <div className="mx-auto w-full max-w-md">
 
-        {/* Back Button */}
-        <div className="mb-3 sm:mb-16">
-          <button
-            type="button"
-            onClick={handleBack}
-            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-200 hover:text-indigo-600 active:scale-95"
-          >
-            <span className="text-lg leading-none">←</span>
-            <span>Home</span>
-          </button>
-        </div>
+        <div className="mx-auto mb-5 w-full max-w-md">
+  <button
+    type="button"
+    onClick={handleBack}
+    className="
+      group inline-flex items-center gap-2
+      rounded-xl border border-slate-200
+      bg-white px-4 py-2.5
+      text-sm font-semibold text-slate-600
+      shadow-sm transition-all duration-200
+      hover:border-indigo-200
+      hover:bg-indigo-50
+      hover:text-indigo-700
+      hover:shadow-md
+      active:scale-95
+    "
+  >
+    <ArrowLeft
+      size={17}
+      className="transition-transform duration-200 group-hover:-translate-x-1"
+    />
+    Home
+  </button>
+</div>
 
         {/* Login Card */}
         <div className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm sm:rounded-3xl sm:p-8">
@@ -121,7 +165,7 @@ export default function Login() {
           {/* Header */}
           <div className="mb-5 text-center sm:mb-7">
             <h2 className="text-xl font-black tracking-tight text-slate-900 sm:text-2xl">
-              Welcome to Zeric
+              Welcome to Zeriy
             </h2>
 
             <p className="mx-auto mt-1.5 max-w-xs text-[11px] leading-relaxed text-slate-500 sm:text-sm">
@@ -228,7 +272,7 @@ Made simpler and Much faster            </p>
             </div>
 
             {/* Forgot Password */}
-            <div className="-mt-3 flex justify-end">
+            <div className="-mt-6 flex justify-end">
               <button
                 type="button"
                 onClick={() => {
@@ -239,6 +283,36 @@ Made simpler and Much faster            </p>
                 Forgot Password?
               </button>
             </div>
+            <div className="mt-5 flex items-start gap-2">
+  <input
+    type="checkbox"
+    required
+    name="agree"
+    id="agree"
+    className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-indigo-600  "
+  />
+
+  <label
+    htmlFor="agree"
+    className="mt-1 text-sm leading-5 text-gray-600"
+  >
+    I agree to the{" "}
+    <a
+      href="/terms"
+      className="font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+    >
+      Terms & Conditions
+    </a>{" "}
+    and{" "}
+    <a
+      href="/privacy"
+      className="font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+    >
+      Privacy Policy
+    </a>
+    .
+  </label>
+</div>
 
             {/* Login Button */}
             <button

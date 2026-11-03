@@ -69,7 +69,7 @@ export default function Footer() {
     <footer className="mt-10">
 
       {/* =====================================================
-          HOW Zeric WORKS
+          HOW Zeriy WORKS
       ====================================================== */}
 
       <section className="bg-white border-y border-gray-200">
@@ -84,7 +84,7 @@ export default function Footer() {
             </p>
 
             <h2 className="mt-2 text-3xl font-bold text-gray-900">
-              How Zeric Works
+              How Zeriy Works
             </h2>
 
             <p className="mt-3 text-gray-500 max-w-2xl mx-auto">
@@ -180,7 +180,7 @@ export default function Footer() {
 
 
       {/* =====================================================
-          WHY Zeric
+          WHY Zeriy
       ====================================================== */}
 
       <section className="bg-gray-50">
@@ -191,7 +191,7 @@ export default function Footer() {
           <div className="text-center">
 
             <p className="text-sm font-semibold text-indigo-600 uppercase tracking-wider">
-              Why Zeric?
+              Why Zeriy?
             </p>
 
             <h2 className="mt-2 text-3xl font-bold text-gray-900">
@@ -199,7 +199,7 @@ export default function Footer() {
             </h2>
 
             <p className="mt-3 text-gray-500 max-w-2xl mx-auto">
-              Zeric helps you plan your visit instead of spending
+              Zeriy helps you plan your visit instead of spending
               your time waiting in a queue.
             </p>
 
@@ -313,7 +313,7 @@ export default function Footer() {
 <div className="w-9 h-9 rounded-lg overflow-hidden flex items-center justify-center">
   <Image
     src="/logo.png"
-    alt="Zeric"
+    alt="Zeriy"
     width={36}
     height={36}
     className="w-full h-full object-contain"
@@ -322,7 +322,7 @@ export default function Footer() {
 </div>
 
                 <span className="text-lg font-bold text-gray-900">
-                  Zeric
+                  Zeriy
                 </span>
 
               </Link>
@@ -380,7 +380,7 @@ export default function Footer() {
           <div className="flex flex-col sm:flex-row items-center justify-between gap-2">
 
             <p className="text-xs text-gray-400">
-              © 2026 Zeric. All rights reserved.
+              © 2026 Zeriy. All rights reserved.
             </p>
 
             <p className="text-xs text-gray-400">

@@ -2,6 +2,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import toast from "react-hot-toast";
+ 
 
 const plans = [
   {
@@ -62,6 +64,8 @@ const plans = [
 export default function PlansPage() {
   const [billing, setBilling] = useState("monthly");
   const [currentPlan] = useState("free");
+const router = useRouter();
+  
 
 const handleUpgrade = (plan) => {
   if (plan.id === currentPlan) {
@@ -83,13 +87,14 @@ const handleUpgrade = (plan) => {
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
 
           <div className="flex items-center gap-3">
-            <Link
-              href="/"
-              aria-label="Go back home"
-              className="flex h-9 w-9 items-center justify-center rounded-full text-gray-600 transition hover:bg-gray-100"
-            >
-              <ArrowLeft size={21} />
-            </Link>
+          <button
+  type="button"
+  onClick={() => router.back()}
+  aria-label="Go back"
+  className="flex h-9 w-9 items-center justify-center rounded-full text-gray-600 transition-all duration-150 hover:bg-gray-100 active:scale-90 active:bg-gray-200"
+>
+  <ArrowLeft size={21} />
+</button>
 
             <div>
               <h1 className="text-base font-bold sm:text-lg">
@@ -120,13 +125,13 @@ const handleUpgrade = (plan) => {
        <div className="mx-auto mb-5 inline-flex w-fit items-center gap-2.5 rounded-full border border-indigo-200/80 bg-gradient-to-r from-indigo-50 to-violet-50 px-4 py-2 text-xs font-bold tracking-[0.12em] text-indigo-700 shadow-sm">
   <Image
     src="/logo.png"
-    alt="Zeric Logo"
+    alt="Zeriy Logo"
     width={20}
     height={20}
     className="h-[20px] w-[20px] shrink-0 object-contain  rounded-md"
     priority
   />
-  <span>ZERIC MEMBERSHIP</span>
+  <span>ZERIY MEMBERSHIP</span>
 </div>
 
           <h2 className="text-3xl font-extrabold tracking-tight text-gray-900 sm:text-5xl">
@@ -137,7 +142,7 @@ const handleUpgrade = (plan) => {
           </h2>
 
           <p className="mx-auto mt-5 max-w-xl text-sm leading-7 text-gray-500 sm:text-base">
-            Get more convenience with Zeric. Choose a plan that
+            Get more convenience with Zeriy. Choose a plan that
             fits your needs and enjoy a smoother booking experience.
           </p>
 
@@ -353,7 +358,7 @@ const handleUpgrade = (plan) => {
       {/* FOOTER */}
       <footer className="border-t border-gray-200 bg-gray-50 px-4 py-7 text-center">
         <p className="text-xs text-gray-500">
-          © {new Date().getFullYear()} Zeric. Made Simpler & Much Faster.
+          © {new Date().getFullYear()} Zeriy. Made Simpler & Much Faster.
         </p>
 
         <Link

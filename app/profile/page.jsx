@@ -1,14 +1,15 @@
- 
 "use client";
 
 import { useEffect, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
-import { MapPin, CalendarCheck } from "lucide-react";
+import { MapPin, CalendarCheck, LogOut, LogIn } from "lucide-react";
 import toast from "react-hot-toast";
 import LocationPicker from "@/components/LocationPicker";
 import { useRouter } from "next/navigation";
 import LoadingScreen from "@/components/LoadingScreen";
+
+const STORAGE_KEY = "Zeriy-location";
 
 export default function ProfilePage() {
   const { data: session, status, update } = useSession();
@@ -21,35 +22,65 @@ export default function ProfilePage() {
   });
 
   const [location, setLocation] = useState("");
-  const [loading] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
 
+  // Load profile information from session
   useEffect(() => {
-    if (user) {
-      setFormData({
-        name: user.name || "",
-        phone: user.phone || "",
-      });
+    if (!user) return;
+
+    setFormData({
+      name: user.name || "",
+      phone: user.phone || "",
+    });
+  }, [user?.name, user?.phone]);
+
+  // Load location from NextAuth session, then localStorage
+  useEffect(() => {
+    if (!user) return;
+
+    const sessionAddress = user.address || "";
+
+    if (sessionAddress) {
+      setLocation(sessionAddress);
+
+      const savedLocation = {
+        type: "search",
+        name: user.locationName || "",
+        address: sessionAddress,
+        latitude: user.latitude ?? null,
+        longitude: user.longitude ?? null,
+      };
+
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(savedLocation)
+      );
+
+      return;
     }
-  }, [user]);
 
-  useEffect(() => {
-    const savedLocation = localStorage.getItem("Zeric-location");
+    try {
+      const savedLocation = localStorage.getItem(STORAGE_KEY);
 
-    if (savedLocation) {
-      try {
+      if (savedLocation) {
         const parsed = JSON.parse(savedLocation);
 
-        if (parsed.address) {
+        if (parsed?.address) {
           setLocation(parsed.address);
         }
-      } catch {
-        localStorage.removeItem("Zeric-location");
       }
+    } catch (error) {
+      console.error("PROFILE_LOCATION_CACHE_ERROR:", error);
+      localStorage.removeItem(STORAGE_KEY);
     }
-  }, []);
+  }, [
+    user?.address,
+    user?.locationName,
+    user?.latitude,
+    user?.longitude,
+  ]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -60,6 +91,7 @@ export default function ProfilePage() {
     }));
   };
 
+  // Update profile name and phone
   const handleSave = async () => {
     if (!formData.name.trim()) {
       toast.error("Please enter your name.");
@@ -88,21 +120,61 @@ export default function ProfilePage() {
       }
 
       await update({
-        name: data.name || formData.name,
-        phone: data.phone || formData.phone,
+        name: data.name || formData.name.trim(),
+        phone: data.phone || formData.phone.trim(),
       });
 
       setFormData({
-        name: data.name || formData.name,
-        phone: data.phone || formData.phone,
+        name: data.name || formData.name.trim(),
+        phone: data.phone || formData.phone.trim(),
       });
 
       setEditing(false);
       toast.success("Profile updated successfully.");
-    } catch {
+    } catch (error) {
+      console.error("PROFILE_UPDATE_ERROR:", error);
       toast.error("Something went wrong.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Handle location selection
+  const handleLocationSelected = async (data) => {
+    if (!data?.address?.trim()) return;
+
+    const locationData = {
+      type: data.type || "search",
+      name: data.name || "",
+      address: data.address,
+      latitude: data.latitude ?? null,
+      longitude: data.longitude ?? null,
+      city: data.city || "",
+      state: data.state || "",
+      pinCode: data.pinCode || "",
+    };
+
+    // Update UI immediately
+    setLocation(locationData.address);
+    setShowLocationPicker(false);
+
+    // Update local cache
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(locationData)
+    );
+
+    // Update NextAuth session
+    try {
+      await update({
+        latitude: locationData.latitude,
+        longitude: locationData.longitude,
+        locationName: locationData.name,
+        address: locationData.address,
+      });
+    } catch (error) {
+      console.error("SESSION_LOCATION_UPDATE_ERROR:", error);
+      toast.error("Location saved, but session refresh failed.");
     }
   };
 
@@ -121,7 +193,7 @@ export default function ProfilePage() {
     });
   };
 
-  if (status === "loading" || loading) {
+  if (status === "loading") {
     return <LoadingScreen />;
   }
 
@@ -150,7 +222,6 @@ export default function ProfilePage() {
       <header className="border-b border-gray-200 bg-white">
         <div className="mx-auto flex min-h-[64px] w-full max-w-3xl items-center justify-between gap-3 px-4 sm:min-h-[72px] sm:px-6">
 
-          {/* LEFT SIDE */}
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <button
               type="button"
@@ -173,7 +244,6 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          {/* RIGHT SIDE - MY BOOKINGS */}
           <Link
             href="/my-bookings"
             className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-indigo-700 active:scale-[0.98] sm:px-4 sm:text-sm"
@@ -204,7 +274,7 @@ export default function ProfilePage() {
                   </h2>
 
                   <p className="text-xs text-gray-500 sm:text-sm">
-                    Zeric Customer
+                    Zeriy Customer
                   </p>
                 </div>
               </div>
@@ -349,25 +419,45 @@ export default function ProfilePage() {
 
           {/* LOGIN / LOGOUT */}
           {!editing && (
-            <div className="border-t border-gray-100 px-4 py-5 sm:px-6">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
-                <Link
-                  href="/login"
-                  className="w-full rounded-xl border border-indigo-200 px-5 py-2.5 text-center text-sm font-semibold text-indigo-600 transition hover:bg-indigo-50 sm:w-auto"
-                >
-                  Login
-                </Link>
+  <div className="border-t border-gray-100 px-4 py-5 sm:px-6">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
+      <Link
+        href="/login"
+        className="
+          group inline-flex w-full items-center justify-center gap-2
+          rounded-xl border border-indigo-200 bg-white
+          px-5 py-3 text-sm font-semibold text-indigo-600
+          shadow-sm transition-all duration-200
+          hover:-translate-y-0.5 hover:border-indigo-400
+          hover:bg-indigo-50 hover:shadow-md
+          active:translate-y-0 active:scale-[0.98]
+          sm:w-auto
+        "
+      >
+        <LogIn size={17} className="transition-transform group-hover:translate-x-0.5" />
+        Login
+      </Link>
 
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  className="w-full rounded-xl border border-red-200 px-5 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-50 sm:w-auto"
-                >
-                  Logout
-                </button>
-              </div>
-            </div>
-          )}
+      <button
+        type="button"
+        onClick={handleLogout}
+        className="
+          group inline-flex w-full items-center justify-center gap-2
+          rounded-xl border border-red-200 bg-white
+          px-5 py-3 text-sm font-semibold text-red-600
+          shadow-sm transition-all duration-200
+          hover:-translate-y-0.5 hover:border-red-400
+          hover:bg-red-50 hover:shadow-md
+          active:translate-y-0 active:scale-[0.98]
+          sm:w-auto
+        "
+      >
+        <LogOut size={17} className="transition-transform group-hover:translate-x-0.5" />
+        Logout
+      </button>
+    </div>
+  </div>
+)}
         </div>
       </section>
 
@@ -375,10 +465,7 @@ export default function ProfilePage() {
       <LocationPicker
         open={showLocationPicker}
         onClose={() => setShowLocationPicker(false)}
-        onLocationSelected={(data) => {
-          setLocation(data.address);
-          setShowLocationPicker(false);
-        }}
+        onLocationSelected={handleLocationSelected}
       />
     </main>
   );

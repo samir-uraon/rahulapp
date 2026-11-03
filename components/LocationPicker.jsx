@@ -12,7 +12,7 @@ import {
 import toast from "react-hot-toast";
 import { useSession } from "next-auth/react";
 
-const STORAGE_KEY = "Zeric-location";
+const STORAGE_KEY = "Zeriy-location";
 const LEGACY_STORAGE_KEY = "queueease-location";
 
 function getCachedLocation() {
@@ -26,7 +26,7 @@ function getCachedLocation() {
     const parsed = JSON.parse(value);
 
     if (parsed && typeof parsed === "object") {
-      // Migrate old QueueEase cache to Zeric.
+      // Migrate old QueueEase cache to Zeriy.
       localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
       return parsed;
     }
@@ -145,17 +145,18 @@ export default function LocationPicker({
   // UPDATE NEXTAUTH SESSION
   // =====================================================
 
-  const updateSessionLocation = async (data) => {
-    try {
-      await update({
-        location: data.address || "",
-        latitude: data.latitude ?? null,
-        longitude: data.longitude ?? null,
-      });
-    } catch (error) {
-      console.error("SESSION_LOCATION_UPDATE_ERROR:", error);
-    }
-  };
+const updateSessionLocation = async (data) => {
+  try {
+    await update({
+      latitude: data.latitude ?? null,
+      longitude: data.longitude ?? null,
+      locationName: data.name || "",
+      address: data.address || "",
+    });
+  } catch (error) {
+    console.error("SESSION_LOCATION_UPDATE_ERROR:", error);
+  }
+};
 
   // =====================================================
   // SEARCH LOCATIONS

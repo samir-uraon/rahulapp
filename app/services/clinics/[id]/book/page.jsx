@@ -482,7 +482,7 @@ export default function ClinicBookingPage() {
 
   const [patientName, setPatientName] = useState(session?.user?.name);
   const [age, setAge] = useState("");
-  const [gender, setGender] = useState("");
+  const [gender, setGender] = useState("Male");
 
   const [appointmentDate, setAppointmentDate] = useState("");
   const [appointmentTime, setAppointmentTime] = useState("");

@@ -132,14 +132,14 @@ export async function POST(request) {
     try {
       await transporter.sendMail({
         from: process.env.EMAIL_USER
-          ? `Zeric <${process.env.EMAIL_USER}>`
+          ? `Zeriy <${process.env.EMAIL_USER}>`
           : undefined,
         to: user.email,
-        subject: "Your Zeric Password Reset OTP",
-        text: `Your Zeric password reset OTP is ${otp}. It expires in ${OTP_EXPIRY_MINUTES} minutes. If you did not request this, ignore this email.`,
+        subject: "Your Zeriy Password Reset OTP",
+        text: `Your Zeriy password reset OTP is ${otp}. It expires in ${OTP_EXPIRY_MINUTES} minutes. If you did not request this, ignore this email.`,
         html: `
           <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px;color:#334155">
-            <h2 style="color:#312e81">Reset your Zeric password</h2>
+            <h2 style="color:#312e81">Reset your Zeriy password</h2>
             <p>Hello ${escapeHtml(user.name || "there")},</p>
             <p>Use this one-time password to reset your password:</p>
             <div style="margin:24px 0;padding:18px;background:#eef2ff;border-radius:12px;text-align:center">
@@ -148,7 +148,7 @@ export async function POST(request) {
             <p>This OTP expires in <strong>${OTP_EXPIRY_MINUTES} minutes</strong>.</p>
             <p>If you did not request a password reset, you can safely ignore this email.</p>
             <hr style="border:0;border-top:1px solid #e2e8f0;margin:24px 0" />
-            <p style="font-size:12px;color:#64748b">Zeric — Made Simpler &amp; Much Faster</p>
+            <p style="font-size:12px;color:#64748b">Zeriy — Made Simpler &amp; Much Faster</p>
           </div>
         `,
       });

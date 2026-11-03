@@ -41,7 +41,7 @@ export default function Header({ user, showBack = false }) {
             <div className="h-9 w-9 shrink-0 overflow-hidden rounded-xl bg-white sm:h-11 sm:w-11">
               <Image
                 src="/logo.png"
-                alt="Zeric Logo"
+                alt="Zeriy Logo"
                 width={44}
                 height={44}
                 className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-105"
@@ -51,7 +51,7 @@ export default function Header({ user, showBack = false }) {
 
             <div className="min-w-0">
               <h1 className="text-base font-extrabold leading-tight tracking-tight text-gray-900 sm:text-xl">
-                Zeric
+                Zeriy
               </h1>
 
               <p className="hidden whitespace-nowrap text-[11px] text-gray-500 sm:block sm:text-xs">

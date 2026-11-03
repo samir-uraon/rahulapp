@@ -18,6 +18,7 @@ import {
   CreditCard,
   ArrowRight,
   Navigation,
+  XCircle,
 } from "lucide-react";
 
 const INDIA_TIME_ZONE = "Asia/Kolkata";
@@ -347,37 +348,6 @@ function getDuration(booking) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
-function getWaitMinutes(booking) {
-  const value =
-    booking.estimatedWaitMinutes ??
-    booking.queue?.estimatedWaitMinutes;
-
-  if (value !== null && value !== undefined && value !== "") {
-    const number = Number(value);
-
-    if (Number.isFinite(number)) {
-      return Math.max(0, number);
-    }
-  }
-
-  const peopleAhead = getPeopleAhead(booking);
-  const duration = getDuration(booking);
-
-  if (peopleAhead === null || duration === null) return null;
-
-  return peopleAhead * duration;
-}
-
-function getSavedExpectedTurn(booking) {
-  return (
-    booking.expectedTurnAt ??
-    booking.queue?.expectedTurnAt ??
-    null
-  );
-}
-
-
-
 function normalizeStatus(status) {
   const value = String(status || "waiting")
     .trim()
@@ -401,6 +371,31 @@ function normalizeStatus(status) {
   return aliases[value] || value;
 }
 
+function canCancelBooking(booking, now = Date.now()) {
+  const status = normalizeStatus(booking.status);
+  const blockedStatuses = [
+    "completed",
+    "cancelled",
+    "skipped",
+    "refunded",
+    "failed",
+    "rejected",
+    "serving",
+    "in-progress",
+  ];
+
+  if (blockedStatuses.includes(status)) return false;
+
+  const createdAt = parseDate(booking.createdAt);
+  if (!createdAt) return false;
+
+  const twoHoursMs = 2 * 60 * 60 * 1000;
+  const elapsed = now - createdAt.getTime();
+
+  // Cancel button is allowed ONLY WITHIN 2 hours of creation
+  return elapsed >= 0 && elapsed <= twoHoursMs;
+}
+
 function shouldMarkCompleted(booking) {
   return normalizeStatus(booking.status) === "completed";
 }
@@ -417,168 +412,70 @@ function isActiveStatus(status) {
   return !isHistoryStatus(status);
 }
 
-function formatIndiaTime(date) {
-  if (!date || Number.isNaN(date.getTime())) return "";
-
-  return date.toLocaleTimeString("en-IN", {
-    timeZone: INDIA_TIME_ZONE,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-
-function getActualCheckupTime(booking) {
+function getActualArrivalTime(booking) {
   return (
+    booking.arrivalTime ??
+    booking.queue?.arrivalTime ??
     booking.actualStartTime ??
     booking.actualCheckupTime ??
     booking.actualTime ??
-    booking.queue?.actualStartTime ??
-    booking.queue?.actualCheckupTime ??
-    booking.queue?.actualTime ??
-    booking.queue?.checkupTime ??
     null
   );
 }
 
-function getEmergencyQueueInfo(booking) {
-  const queue = booking.queue || {};
-
-  const emergencyAhead = Number(
-    booking.emergencyPatientsAhead ??
-    queue.emergencyPatientsAhead ??
-    booking.emergencyAhead ??
-    queue.emergencyAhead ??
-    0
-  );
-
-  const emergencyBeingServed =
-    booking.emergencyBeingServed === true ||
-    queue.emergencyBeingServed === true ||
-    booking.isEmergencyInProgress === true ||
-    queue.isEmergencyInProgress === true;
-
-  const explicitDelay = Number(
-    booking.emergencyDelayMinutes ??
-    queue.emergencyDelayMinutes ??
-    0
-  );
-
-  const duration = getDuration(booking);
-
-  // Use a supplied delay where available. Otherwise estimate
-  // one consultation per emergency patient ahead.
-  const delayMinutes =
-    Number.isFinite(explicitDelay) && explicitDelay > 0
-      ? explicitDelay
-      : Math.max(0, emergencyAhead) * (duration || 0);
-
-  return {
-    emergencyAhead: Math.max(0, emergencyAhead),
-    emergencyBeingServed,
-    delayMinutes,
-    hasEmergencyDelay:
-      emergencyBeingServed ||
-      emergencyAhead > 0 ||
-      explicitDelay > 0,
-  };
-}
-
-function makeIndiaDateFromMinutes(dateKey, minutes) {
-  if (!dateKey || !Number.isFinite(minutes)) return null;
-
-  const [year, month, day] = dateKey.split("-").map(Number);
-
-  // Convert India local minutes to a UTC timestamp.
-  return new Date(
-    Date.UTC(year, month - 1, day, 0, minutes) -
-      330 * 60 * 1000
-  );
-}
-
-function getExpectedTurnDate(booking) {
+function getSessionStartDisplay(booking, now = Date.now()) {
   const status = normalizeStatus(booking.status);
+  const slotDate = getIndiaDateKey(getDateValue(booking));
+  const isStarted = ["serving", "in-progress"].includes(status);
 
-  if (HISTORY_STATUSES.includes(status)) {
-    return null;
+  if (!slotDate) {
+    return { label: "Session time unavailable", started: false };
   }
 
-  const dateKey = getIndiaDateKey(getDateValue(booking));
+  if (isStarted) {
+    const arrivalTime = getActualArrivalTime(booking);
 
-  if (!dateKey) return null;
-
-  const actualTime = parseTimeForQueue(
-    getActualCheckupTime(booking)
-  );
-
-  const checkupTime = parseTimeForQueue(
-    getCheckupStartValue(booking)
-  );
-
-  const bookingTime = parseTimeForQueue(
-    getBookingTimeValue(booking)
-  );
-
-  const updatedAt = parseDate(
-    booking.updatedAt ?? booking.queue?.updatedAt
-  );
-
-  // An actual checkup start time takes priority over configured times.
-  const actualMinutes =
-    actualTime ??
-    (["serving", "in-progress"].includes(status) && updatedAt
-      ? getIndiaMinutes(updatedAt)
-      : null);
-
-  const baseMinutes =
-    actualMinutes ?? checkupTime ?? bookingTime;
-
-  if (baseMinutes === null || baseMinutes === undefined) {
-    return null;
+    return {
+      label: arrivalTime
+        ? `Doctor started at ${formatTime(arrivalTime)}`
+        : "Doctor has started the session",
+      started: true,
+    };
   }
 
-  // Do not add the patient's own waiting time when already serving.
-  const isServing = ["serving", "in-progress"].includes(status);
+  const scheduledTime = getCheckupStartValue(booking);
+  const scheduledMinutes = parseTimeForQueue(scheduledTime);
 
-  const peopleAhead = isServing ? 0 : getPeopleAhead(booking) ?? 0;
-  const duration = getDuration(booking) ?? 0;
+  if (scheduledMinutes === null) {
+    return { label: "Session time unavailable", started: false };
+  }
 
-  const normalQueueWait = peopleAhead * duration;
+  const today = getIndiaDateKey(new Date(now));
 
-  // Add emergency delay only when the queue data reports it.
-  const emergency = getEmergencyQueueInfo(booking);
+  if (slotDate > today) {
+    return {
+      label: `Doctor's checkup starts at ${formatTime(scheduledTime)}`,
+      started: false,
+    };
+  }
 
-  const emergencyDelay = isServing
-    ? 0
-    : emergency.delayMinutes;
+  if (slotDate < today) {
+    return { label: "Not started yet", started: false };
+  }
 
-  return makeIndiaDateFromMinutes(
-    dateKey,
-    baseMinutes + normalQueueWait + emergencyDelay
-  );
+  const currentMinutes = getIndiaMinutes(new Date(now));
+
+  if (currentMinutes < scheduledMinutes) {
+    return {
+      label: `Doctor's checkup starts at ${formatTime(scheduledTime)}`,
+      started: false,
+    };
+  }
+
+  return { label: "Not started yet", started: false };
 }
-
-function getExpectedTurn(booking) {
-  const expectedDate = getExpectedTurnDate(booking);
-
-  return expectedDate ? formatIndiaTime(expectedDate) : "";
-}
-
 
 function getBookingSortTime(booking) {
-  const expected = getExpectedTurnDate(booking);
-
-  if (expected) {
-    return getIndiaMinutes(expected) ?? Number.MAX_SAFE_INTEGER;
-  }
-
-  const saved = parseDate(getSavedExpectedTurn(booking));
-
-  if (saved) {
-    return getIndiaMinutes(saved) ?? Number.MAX_SAFE_INTEGER;
-  }
-
   return (
     parseTimeForQueue(
       getCheckupStartValue(booking) || getBookingTimeValue(booking)
@@ -638,7 +535,6 @@ function getSlotTimes(booking) {
 
 const BOOKINGS_CACHE_TTL = 30_000;
 
-// In-memory cache survives component unmount/remount during navigation.
 const bookingsCache = new Map();
 const bookingsRequests = new Map();
 
@@ -649,21 +545,6 @@ function getBookingsCacheKey(session) {
   const identity = userId || email;
 
   return identity ? `my-bookings:${identity}` : null;
-}
-
-function getCachedBookings(key) {
-  if (!key) return null;
-
-  const cached = bookingsCache.get(key);
-
-  if (!cached) return null;
-
-  if (Date.now() >= cached.expiresAt) {
-    bookingsCache.delete(key);
-    return null;
-  }
-
-  return cached.bookings;
 }
 
 function setCachedBookings(key, bookings) {
@@ -827,10 +708,7 @@ function getGoogleMapsUrl(booking, lat, lng, hasCoordinates, address) {
     )}`;
   }
 
-  const clinicName =
-    booking.clinicName ||
-    booking.clinic?.name ||
-    "";
+  const clinicName = booking.clinicName || booking.clinic?.name || "";
 
   if (clinicName) {
     return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
@@ -841,7 +719,7 @@ function getGoogleMapsUrl(booking, lat, lng, hasCoordinates, address) {
   return null;
 }
 
-function BookingCard({ booking, now }) {
+function BookingCard({ booking, now, onCancel, cancelling }) {
   const { start, end } = getSlotTimes(booking);
 
   const patient =
@@ -894,9 +772,9 @@ function BookingCard({ booking, now }) {
     address
   );
 
-  const status = getDisplayStatus(booking, now);
+  const status = getDisplayStatus(booking);
   const peopleAhead = getPeopleAhead(booking);
-  const expectedTurn = getExpectedTurn(booking);
+  const sessionInfo = getSessionStartDisplay(booking, now);
   const duration = getDuration(booking);
   const paymentAmount = getPaymentAmount(booking);
 
@@ -907,13 +785,6 @@ function BookingCard({ booking, now }) {
     "serving",
     "your-turn",
   ].includes(status);
-
-  const slot = getSlot(booking);
-
-  const slotOpen =
-    typeof slot === "object"
-      ? slot.open || slot.start || ""
-      : "";
 
   const token =
     booking.tokenNumber ||
@@ -970,42 +841,17 @@ function BookingCard({ booking, now }) {
               </p>
             </div>
 
-          
-<div className="rounded-lg bg-white p-3">
-  <p className="text-xs text-gray-500">Expected Turn</p>
-
-  <p className="mt-1 text-lg font-bold text-indigo-700">
-  {expectedTurn
-    ? `${expectedTurn} (Please come before that time)`
-    : "Expected time not available"}
-</p>
-
-  {(() => {
-    const emergency = getEmergencyQueueInfo(booking);
-
-    if (!emergency.hasEmergencyDelay) return null;
-
-    return (
-      <p className="mt-2 text-xs font-medium leading-5 text-amber-700">
-        Delayed — an emergency patient may be attended to first.
-        {emergency.delayMinutes > 0
-          ? ` Estimated additional delay: ${emergency.delayMinutes} minutes.`
-          : ""}
-      </p>
-    );
-  })()}
-
-  <p className="mt-2 text-xs text-gray-500">
-    This is an estimate. Actual consultation times may change.
-  </p>
-</div>
-
+            <div className="rounded-lg bg-white p-3">
+              <p className="text-xs text-gray-500">Doctor's Session</p>
+              <p
+                className={`mt-1 text-lg font-bold ${
+                  sessionInfo.started ? "text-green-700" : "text-indigo-700"
+                }`}
+              >
+                {sessionInfo.label}
+              </p>
+            </div>
           </div>
-
-          <p className="mt-3 text-xs leading-5 text-gray-500">
-            Queue estimates may change when consultations take longer,
-            patients are added, or priority cases are handled.
-          </p>
         </div>
       )}
 
@@ -1033,9 +879,7 @@ function BookingCard({ booking, now }) {
 
             {start && (
               <p className="mt-1 text-sm font-medium text-gray-800">
-                {end
-                  ? `Booking slot: ${formatTime(slotOpen) || start} - ${formatTime(end)}`
-                  : formatTime(start)}
+                {end ? `${start} - ${end}` : start}
               </p>
             )}
 
@@ -1148,6 +992,23 @@ function BookingCard({ booking, now }) {
             </span>
           </div>
         )}
+
+      {canCancelBooking(booking, now) && (
+        <div className="mt-5 border-t border-gray-100 pt-4">
+          <button
+            type="button"
+            onClick={() => onCancel?.(booking)}
+            disabled={cancelling}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+          >
+            <XCircle size={16} />
+            {cancelling ? "Cancelling..." : "Cancel Booking"}
+          </button>
+          <p className="mt-2 text-xs text-gray-500">
+            Cancellation is available for 2 hours after booking creation.
+          </p>
+        </div>
+      )}
     </article>
   );
 }
@@ -1179,73 +1040,122 @@ export default function MyBookingsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
+  const [cancellingBookingId, setCancellingBookingId] = useState(null);
 
-const userCacheKey = getBookingsCacheKey(session);
+  const userCacheKey = getBookingsCacheKey(session);
 
-const fetchBookings = useCallback(
-  async (isRefresh = false, silent = false) => {
-    if (!userCacheKey) return;
+  const fetchBookings = useCallback(
+    async (isRefresh = false, silent = false) => {
+      if (!userCacheKey) return;
 
-    try {
-      if (isRefresh) {
-        if (!silent) setRefreshing(true);
-      } else if (!silent) {
-        setLoading(true);
+      try {
+        if (isRefresh) {
+          if (!silent) setRefreshing(true);
+        } else if (!silent) {
+          setLoading(true);
+        }
+
+        setError("");
+
+        let requestPromise = bookingsRequests.get(userCacheKey);
+
+        if (!requestPromise) {
+          const promise = fetch("/api/my-bookings", {
+            method: "GET",
+            cache: "no-store",
+            headers: {
+              Accept: "application/json",
+            },
+          }).then(async (response) => {
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok || !data.success) {
+              throw new Error(
+                data.message || "Unable to load your bookings."
+              );
+            }
+
+            return Array.isArray(data.bookings) ? data.bookings : [];
+          });
+
+          requestPromise = promise;
+          bookingsRequests.set(userCacheKey, promise);
+
+          promise
+            .finally(() => {
+              if (bookingsRequests.get(userCacheKey) === promise) {
+                bookingsRequests.delete(userCacheKey);
+              }
+            })
+            .catch(() => {});
+        }
+
+        const freshBookings = await requestPromise;
+
+        setCachedBookings(userCacheKey, freshBookings);
+        setBookings(freshBookings);
+      } catch (err) {
+        setError(
+          err?.message ||
+            "Something went wrong while loading bookings."
+        );
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [userCacheKey]
+  );
+
+  const handleCancelBooking = useCallback(
+    async (booking) => {
+      const bookingId = booking?._id || booking?.id;
+
+      if (!bookingId) {
+        setError("Unable to identify this booking. Please refresh and try again.");
+        return;
       }
 
-      setError("");
+      const confirmed = window.confirm(
+        "Are you sure you want to cancel this booking? This action cannot be undone."
+      );
+      if (!confirmed) return;
 
-      // Reuse an existing request for the same user.
-      let requestPromise = bookingsRequests.get(userCacheKey);
+      try {
+        setCancellingBookingId(String(bookingId));
+        setError("");
 
-    if (!requestPromise) {
-  const promise = fetch("/api/my-bookings", {
-    method: "GET",
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
+        const response = await fetch("/api/my-bookings/cancel", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({ bookingId: String(bookingId) }),
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || "Unable to cancel this booking.");
+        }
+
+        setBookings((current) =>
+          current.map((item) =>
+            String(item._id || item.id) === String(bookingId)
+              ? { ...item, ...(data.booking || {}), status: "cancelled" }
+              : item
+          )
+        );
+        if (userCacheKey) bookingsCache.delete(userCacheKey);
+        await fetchBookings(true, true);
+      } catch (err) {
+        setError(err?.message || "Unable to cancel this booking.");
+      } finally {
+        setCancellingBookingId(null);
+      }
     },
-  }).then(async (response) => {
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok || !data.success) {
-      throw new Error(
-        data.message || "Unable to load your bookings."
-      );
-    }
-
-    return Array.isArray(data.bookings) ? data.bookings : [];
-  });
-
-  requestPromise = promise;
-  bookingsRequests.set(userCacheKey, promise);
-
-  promise.finally(() => {
-    if (bookingsRequests.get(userCacheKey) === promise) {
-      bookingsRequests.delete(userCacheKey);
-    }
-  }).catch(() => {});
-}
-
-      const freshBookings = await requestPromise;
-
-      // Only update the cache if this user is still active.
-      setCachedBookings(userCacheKey, freshBookings);
-      setBookings(freshBookings);
-    } catch (err) {
-      setError(
-        err?.message ||
-          "Something went wrong while loading bookings."
-      );
-    } finally {
-      // Do not remove a newer request accidentally.
-      // The request map is cleaned up in the request's lifecycle.
-      setLoading(false);
-      setRefreshing(false);
-    }
-  },
-  [userCacheKey]
-);
+    [fetchBookings, userCacheKey]
+  );
 
   useEffect(() => {
     if (sessionStatus === "loading") return;
@@ -1265,7 +1175,7 @@ const fetchBookings = useCallback(
 
     const interval = setInterval(() => {
       setNow(Date.now());
-      fetchBookings(true);
+      fetchBookings(true, true);
     }, 20000);
 
     return () => clearInterval(interval);
@@ -1295,10 +1205,10 @@ const fetchBookings = useCallback(
         dateKey !== null &&
         dateKey >= todayKey &&
         isActiveStatus(status) &&
-        !shouldMarkCompleted(booking, now)
+        !shouldMarkCompleted(booking)
       );
     });
-  }, [sortedBookings, todayKey, now]);
+  }, [sortedBookings, todayKey]);
 
   const pastBookings = useMemo(() => {
     return sortedBookings.filter((booking) => {
@@ -1309,10 +1219,10 @@ const fetchBookings = useCallback(
 
       return (
         dateKey < todayKey ||
-        shouldMarkCompleted(booking, now)
+        shouldMarkCompleted(booking)
       );
     });
-  }, [sortedBookings, todayKey, now]);
+  }, [sortedBookings, todayKey]);
 
   if (sessionStatus === "loading" || loading) {
     return (
@@ -1449,6 +1359,10 @@ const fetchBookings = useCallback(
                     }
                     booking={booking}
                     now={now}
+                    onCancel={handleCancelBooking}
+                    cancelling={
+                      cancellingBookingId === String(booking._id || booking.id)
+                    }
                   />
                 ))}
               </div>
@@ -1483,6 +1397,10 @@ const fetchBookings = useCallback(
                     }
                     booking={booking}
                     now={now}
+                    onCancel={handleCancelBooking}
+                    cancelling={
+                      cancellingBookingId === String(booking._id || booking.id)
+                    }
                   />
                 ))}
               </div>

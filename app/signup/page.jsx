@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { toast } from "react-hot-toast";
+import { ArrowLeft } from "lucide-react";
 
 export default function Signup() {
   const [formData, setFormData] = useState({
@@ -123,26 +124,30 @@ export default function Signup() {
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6 sm:py-10">
         {/* Back Button */}
-      <div className="mx-auto w-full max-w-md mb-4">
-        <button
-          type="button"
-          onClick={handleBack}
-          className="
-            inline-flex items-center gap-2
-            rounded-lg px-4 py-2
-            text-sm font-semibold text-slate-600
-            transition
-            hover:bg-slate-200 hover:text-indigo-600
-            active:scale-95
-          "
-        >
-          <span className="text-lg leading-none">
-            ←
-          </span>
-
-          <span>Home</span>
-        </button>
-      </div>
+    <div className="mx-auto mb-5 w-full max-w-md">
+  <button
+    type="button"
+    onClick={handleBack}
+    className="
+      group inline-flex items-center gap-2
+      rounded-xl border border-slate-200
+      bg-white px-4 py-2.5
+      text-sm font-semibold text-slate-600
+      shadow-sm transition-all duration-200
+      hover:border-indigo-200
+      hover:bg-indigo-50
+      hover:text-indigo-700
+      hover:shadow-md
+      active:scale-95
+    "
+  >
+    <ArrowLeft
+      size={17}
+      className="transition-transform duration-200 group-hover:-translate-x-1"
+    />
+    Home
+  </button>
+</div>
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-md items-center justify-center sm:min-h-[calc(100vh-5rem)]">
         <div className="w-full rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:rounded-3xl sm:p-8">
 
@@ -371,7 +376,7 @@ export default function Signup() {
 
   <label
     htmlFor="agree"
-    className="text-sm leading-5 text-gray-600"
+    className="mt-1 text-sm leading-5 text-gray-600"
   >
     I agree to the{" "}
     <a

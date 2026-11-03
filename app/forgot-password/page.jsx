@@ -281,7 +281,7 @@ export default function ForgotPassword() {
               {step === STEPS.OTP &&
                 `Enter the 6-digit code sent to ${trimmedIdentifier}.`}
               {step === STEPS.PASSWORD &&
-                "Choose a strong password for your Zeric account."}
+                "Choose a strong password for your Zeriy account."}
               {step === STEPS.SUCCESS &&
                 "Your password has been changed successfully. You can now sign in."}
             </p>

@@ -2,20 +2,38 @@
 
 import { useEffect, useState } from "react";
 import LocationPicker from "@/components/LocationPicker";
+import { useSession } from "next-auth/react";
 
-const STORAGE_KEY = "Zeric-location";
+const STORAGE_KEY = "Zeriy-location";
+const LEGACY_STORAGE_KEY = "queueease-location";
 
 export default function LocationManager() {
+  const { update } = useSession();
+
   const [open, setOpen] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [checking, setChecking] = useState(true);
+
+  // Update NextAuth session location fields
+  const updateSessionLocation = async (data) => {
+    try {
+      await update({
+        latitude: data.latitude ?? null,
+        longitude: data.longitude ?? null,
+        locationName: data.name || "",
+        address: data.address || "",
+      });
+    } catch (error) {
+      console.error("SESSION_LOCATION_UPDATE_ERROR:", error);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadLocation() {
       try {
-        // 1. Fetch saved location from MongoDB
+        // Fetch saved location from MongoDB
         const response = await fetch("/api/profile", {
           method: "GET",
           cache: "no-store",
@@ -30,7 +48,6 @@ export default function LocationManager() {
 
         const user = result.user || result.profile || {};
 
-        // 2. Check whether MongoDB has a saved address
         if (user.address?.trim()) {
           const savedLocation = {
             type: user.locationType || "search",
@@ -43,18 +60,23 @@ export default function LocationManager() {
             pinCode: user.pinCode || "",
           };
 
-          // Update local cache
           localStorage.setItem(
             STORAGE_KEY,
             JSON.stringify(savedLocation)
           );
 
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+
           setSelectedLocation(savedLocation);
           setOpen(false);
+
+          // Synchronize MongoDB location with NextAuth session
+          if (!cancelled) {
+            await updateSessionLocation(savedLocation);
+          }
         } else {
-          // 3. No location in MongoDB: ask user to select one
           localStorage.removeItem(STORAGE_KEY);
-          localStorage.removeItem("queueease-location");
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
 
           setSelectedLocation(null);
           setOpen(true);
@@ -64,19 +86,28 @@ export default function LocationManager() {
 
         if (cancelled) return;
 
-        // 4. If API fails, use local cache as fallback
+        // Use local cache if MongoDB request fails
         try {
           const cached = localStorage.getItem(STORAGE_KEY);
-          const parsed = cached ? JSON.parse(cached) : null;
+          const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+          const parsed = JSON.parse(cached || legacy || "null");
 
           if (parsed?.address) {
             setSelectedLocation(parsed);
             setOpen(false);
+
+            localStorage.setItem(
+              STORAGE_KEY,
+              JSON.stringify(parsed)
+            );
+
+            await updateSessionLocation(parsed);
           } else {
             setSelectedLocation(null);
             setOpen(true);
           }
-        } catch {
+        } catch (cacheError) {
+          console.error("LOCATION_CACHE_ERROR:", cacheError);
           setSelectedLocation(null);
           setOpen(true);
         }
@@ -95,7 +126,7 @@ export default function LocationManager() {
   }, []);
 
   // Location successfully saved by LocationPicker
-  const handleLocationSelected = (data) => {
+  const handleLocationSelected = async (data) => {
     if (!data?.address) return;
 
     setSelectedLocation(data);
@@ -105,9 +136,12 @@ export default function LocationManager() {
       STORAGE_KEY,
       JSON.stringify(data)
     );
+
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+
+    await updateSessionLocation(data);
   };
 
-  // Avoid rendering the picker before checking MongoDB
   if (checking) return null;
 
   return (
