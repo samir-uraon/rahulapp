@@ -1,12 +1,12 @@
 
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { toast } from "react-hot-toast";
 
-export default function VerifyOTP() {
+function VerifyOTPContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -15,71 +15,71 @@ export default function VerifyOTP() {
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
 
-const handleVerifyOTP = async (e) => {
-  e.preventDefault();
+  const handleVerifyOTP = async (e) => {
+    e.preventDefault();
 
-  if (otp.length !== 6) {
-    toast.error("Please enter a valid 6-digit OTP");
-    return;
-  }
-
-  setLoading(true);
-
-  try {
-    const response = await fetch("/api/verify-otp", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        email: email.trim().toLowerCase(),
-        otp,
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      toast.error(data.message || "Invalid OTP");
-      setLoading(false);
+    if (otp.length !== 6) {
+      toast.error("Please enter a valid 6-digit OTP");
       return;
     }
 
-    toast.success("Email verified successfully!");
+    setLoading(true);
 
-    // Signup flow: password is available for automatic login
-    const password = sessionStorage.getItem("signupPassword");
-
-    if (password) {
-      const loginResult = await signIn("credentials", {
-        identifier: email.trim().toLowerCase(),
-        password,
-        redirect: false,
+    try {
+      const response = await fetch("/api/verify-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          otp,
+        }),
       });
 
-      sessionStorage.removeItem("signupPassword");
+      const data = await response.json();
 
-      if (loginResult?.error) {
-        toast.error("Email verified. Please login manually.");
-        router.push("/login");
+      if (!response.ok) {
+        toast.error(data.message || "Invalid OTP");
+        setLoading(false);
         return;
       }
 
-      router.push("/");
+      toast.success("Email verified successfully!");
+
+      // Signup flow: password is available for automatic login
+      const password = sessionStorage.getItem("signupPassword");
+
+      if (password) {
+        const loginResult = await signIn("credentials", {
+          identifier: email.trim().toLowerCase(),
+          password,
+          redirect: false,
+        });
+
+        sessionStorage.removeItem("signupPassword");
+
+        if (loginResult?.error) {
+          toast.error("Email verified. Please login manually.");
+          router.push("/login");
+          return;
+        }
+
+        router.push("/");
+        router.refresh();
+        return;
+      }
+
+      // Login flow: ask user to log in again
+      router.push("/login?verified=1");
       router.refresh();
-      return;
+
+    } catch (error) {
+      console.error("OTP verification error:", error);
+      toast.error("Something went wrong. Please try again.");
+      setLoading(false);
     }
-
-    // Login flow: password is not stored, so ask user to log in again
-    router.push("/login?verified=1");
-    router.refresh();
-
-  } catch (error) {
-    console.error("OTP verification error:", error);
-    toast.error("Something went wrong. Please try again.");
-    setLoading(false);
-  }
-};
+  };
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-slate-50 px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
@@ -106,7 +106,10 @@ const handleVerifyOTP = async (e) => {
           </div>
 
           {/* OTP Form */}
-          <form onSubmit={handleVerifyOTP} className="space-y-4 sm:space-y-5">
+          <form
+            onSubmit={handleVerifyOTP}
+            className="space-y-4 sm:space-y-5"
+          >
             <div>
               <label
                 htmlFor="otp"
@@ -166,9 +169,24 @@ const handleVerifyOTP = async (e) => {
               🔐 Your OTP is required to verify your email address.
             </p>
           </div>
+
         </div>
       </div>
     </main>
   );
 }
 
+// Main page with Suspense boundary
+export default function VerifyOTP() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-dvh items-center justify-center bg-slate-50">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-t-transparent" />
+        </main>
+      }
+    >
+      <VerifyOTPContent />
+    </Suspense>
+  );
+}
