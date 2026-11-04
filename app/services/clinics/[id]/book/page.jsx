@@ -484,7 +484,9 @@ export default function ClinicBookingPage() {
   const [age, setAge] = useState("");
   const [gender, setGender] = useState("Male");
 
-  const [appointmentDate, setAppointmentDate] = useState("");
+const [appointmentDate, setAppointmentDate] = useState(
+  () => getIndiaDateTime().date
+);
   const [appointmentTime, setAppointmentTime] = useState("");
 
   const [error, setError] = useState("");
@@ -538,6 +540,24 @@ export default function ClinicBookingPage() {
     };
   }, [clinicId, doctorId]);
 
+
+  useEffect(() => {
+  if (!availableDates.length) return;
+
+  const currentDateExists = availableDates.some(
+    (date) => date.value === appointmentDate
+  );
+
+  if (currentDateExists) return;
+
+  const firstAvailableDate = availableDates.find(
+    (date) => !date.isClosed
+  );
+
+  setAppointmentDate(
+    firstAvailableDate?.value || availableDates[0].value
+  );
+}, [availableDates, appointmentDate]);
 
 
   // Match doctor directly from clinic.doctors.

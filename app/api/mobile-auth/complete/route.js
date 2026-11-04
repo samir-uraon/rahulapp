@@ -1,4 +1,3 @@
-
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import crypto from "crypto";
@@ -10,10 +9,12 @@ const APP_CALLBACK = "zeriy:///auth/callback";
 
 export async function GET(req) {
   try {
+    const secret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+
     // Read the authenticated NextAuth session from the browser cookie
     const token = await getToken({
       req,
-      secret: process.env.AUTH_SECRET,
+      secret,
     });
 
     if (!token) {
@@ -35,32 +36,30 @@ export async function GET(req) {
     // Generate a random, one-time code
     const code = crypto.randomBytes(32).toString("base64url");
 
-    // Store only the SHA-256 hash, not the original code
+    // Store only the SHA-256 hash
     const codeHash = crypto
       .createHash("sha256")
       .update(code)
       .digest("hex");
 
-    const expiresAt = new Date(Date.now() + 2 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 2 * 60 * 1000); // 2 minutes expiry
 
     const client = await clientPromise;
-
-    // Use the same MongoDB database as your existing authentication code
     const db = client.db(process.env.MONGODB || "rahul");
 
     await db.collection("mobile_auth_codes").insertOne({
       codeHash,
       user: {
-  id: String(userId),
-  name: token.name || "",
-  email: token.email || "",
-  phone: token.phone || "",
-  role: token.role || "",
-  location: token.location || null,
-  address: token.address || null,
-  latitude: token.latitude ?? null,
-  longitude: token.longitude ?? null,
-},
+        id: String(userId),
+        name: token.name || "",
+        email: token.email || "",
+        phone: token.phone || "",
+        role: token.role || "",
+        location: token.location || null,
+        address: token.address || null,
+        latitude: token.latitude ?? null,
+        longitude: token.longitude ?? null,
+      },
       expiresAt,
       createdAt: new Date(),
     });
@@ -71,7 +70,7 @@ export async function GET(req) {
 
     const response = NextResponse.redirect(callbackUrl);
 
-    response.headers.set("Cache-Control", "no-store");
+    response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
     response.headers.set("Pragma", "no-cache");
     response.headers.set("Referrer-Policy", "no-referrer");
 
