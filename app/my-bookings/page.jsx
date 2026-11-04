@@ -373,6 +373,7 @@ function normalizeStatus(status) {
 
 function canCancelBooking(booking, now = Date.now()) {
   const status = normalizeStatus(booking.status);
+
   const blockedStatuses = [
     "completed",
     "cancelled",
@@ -387,13 +388,13 @@ function canCancelBooking(booking, now = Date.now()) {
   if (blockedStatuses.includes(status)) return false;
 
   const createdAt = parseDate(booking.createdAt);
+
   if (!createdAt) return false;
 
-  const twoHoursMs = 2 * 60 * 60 * 1000;
+  const TWO_HOURS = 2 * 60 * 60 * 1000;
   const elapsed = now - createdAt.getTime();
 
-  // Cancel button is allowed ONLY WITHIN 2 hours of creation
-  return elapsed >= 0 && elapsed <= twoHoursMs;
+  return elapsed >= 0 && elapsed <= TWO_HOURS;
 }
 
 function shouldMarkCompleted(booking) {
@@ -993,22 +994,27 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
           </div>
         )}
 
-      {canCancelBooking(booking, now) && (
-        <div className="mt-5 border-t border-gray-100 pt-4">
-          <button
-            type="button"
-            onClick={() => onCancel?.(booking)}
-            disabled={cancelling}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-          >
-            <XCircle size={16} />
-            {cancelling ? "Cancelling..." : "Cancel Booking"}
-          </button>
-          <p className="mt-2 text-xs text-gray-500">
-            Cancellation is available for 2 hours after booking creation.
-          </p>
-        </div>
-      )}
+    {canCancelBooking(booking, now) && (
+  <div className="mt-5 border-t border-gray-100 pt-4">
+    <button
+      type="button"
+      onClick={() => onCancel?.(booking)}
+      disabled={cancelling}
+      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+    >
+      <XCircle size={16} />
+      {cancelling ? "Cancelling..." : "Cancel Booking"}
+    </button>
+
+    <p className="mt-2 text-xs text-gray-500">
+      Cancel within 2 hours of booking creation to qualify for a refund.
+    </p>
+
+    <p className="mt-1 text-xs text-green-700">
+      Eligible refunds are generally credited within 3–4 working days.
+    </p>
+  </div>
+)}
     </article>
   );
 }
@@ -1116,10 +1122,14 @@ export default function MyBookingsPage() {
         return;
       }
 
-      const confirmed = window.confirm(
-        "Are you sure you want to cancel this booking? This action cannot be undone."
-      );
-      if (!confirmed) return;
+const confirmed = window.confirm(
+  "Are you sure you want to cancel this booking?\n\n" +
+  "Cancellation is allowed within 2 hours of booking creation.\n\n" +
+  "If payment was successful, your eligible refund will be initiated and generally credited within 3–4 working days.\n\n" +
+  "This action cannot be undone."
+);
+
+if (!confirmed) return;
 
       try {
         setCancellingBookingId(String(bookingId));
@@ -1139,15 +1149,39 @@ export default function MyBookingsPage() {
           throw new Error(data.message || "Unable to cancel this booking.");
         }
 
-        setBookings((current) =>
-          current.map((item) =>
-            String(item._id || item.id) === String(bookingId)
-              ? { ...item, ...(data.booking || {}), status: "cancelled" }
-              : item
-          )
-        );
-        if (userCacheKey) bookingsCache.delete(userCacheKey);
-        await fetchBookings(true, true);
+      setBookings((current) =>
+  current.map((item) =>
+    String(item._id || item.id) === String(bookingId)
+      ? {
+          ...item,
+          ...(data.booking || {}),
+          status: "cancelled",
+          refundStatus:
+            data.booking?.refundStatus ||
+            data.refundStatus ||
+            item.refundStatus,
+        }
+      : item
+  )
+);
+
+if (userCacheKey) {
+  bookingsCache.delete(userCacheKey);
+}
+
+const refundStatus =
+  data.booking?.refundStatus || data.refundStatus;
+
+if (refundStatus === "initiated" || refundStatus === "processing") {
+  window.alert(
+    "Booking cancelled successfully!\n\n" +
+    "Your refund has been initiated. It should be credited within 3–4 working days."
+  );
+} else {
+  window.alert("Booking cancelled successfully.");
+}
+
+await fetchBookings(true, true);
       } catch (err) {
         setError(err?.message || "Unable to cancel this booking.");
       } finally {

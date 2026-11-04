@@ -448,6 +448,63 @@ function getBookingId(booking) {
       ""
   );
 }
+function getBookingIdentifiers(booking) {
+  return [
+    booking?._id,
+    booking?.bookingId,
+    booking?.bookingReference,
+    booking?.paymentId,
+  ]
+    .filter(Boolean)
+    .map(String);
+}
+
+function mergeUserBookingData(bookingDocuments, embeddedBookings) {
+  return bookingDocuments.map((booking) => {
+    const bookingIds = new Set(getBookingIdentifiers(booking));
+
+    const embeddedBooking = embeddedBookings.find((item) =>
+      getBookingIdentifiers(item).some((id) => bookingIds.has(id))
+    );
+
+    if (!embeddedBooking) return booking;
+
+    return {
+      ...booking,
+      ...embeddedBooking,
+
+      // Keep the dedicated booking document's MongoDB ID.
+      _id: booking._id,
+
+      // Prefer the latest cancellation/refund information
+      // saved in the users collection.
+      status: embeddedBooking.status || booking.status,
+
+      refundStatus:
+        embeddedBooking.refundStatus ?? booking.refundStatus,
+
+      refundId:
+        embeddedBooking.refundId ?? booking.refundId,
+
+      refundAmount:
+        embeddedBooking.refundAmount ?? booking.refundAmount,
+
+      refundInitiatedAt:
+        embeddedBooking.refundInitiatedAt ??
+        booking.refundInitiatedAt,
+
+      refundExpectedDays:
+        embeddedBooking.refundExpectedDays ??
+        booking.refundExpectedDays,
+
+      paymentStatus:
+        embeddedBooking.paymentStatus ?? booking.paymentStatus,
+
+      updatedAt:
+        embeddedBooking.updatedAt || booking.updatedAt,
+    };
+  });
+}
 
 function getClinicId(booking) {
   return String(
@@ -774,6 +831,12 @@ function serializeBooking(booking, clinic, doctor, queueInfo) {
 
   return {
     ...booking,
+    refundStatus: booking.refundStatus || null,
+refundId: booking.refundId || null,
+refundAmount: booking.refundAmount ?? null,
+refundInitiatedAt: booking.refundInitiatedAt || null,
+refundExpectedDays: booking.refundExpectedDays || null,
+paymentStatus: booking.paymentStatus || null,
 
     _id: booking._id ? String(booking._id) : null,
 
@@ -1018,10 +1081,15 @@ export async function GET(request) {
           }))
       : [];
 
-    const userBookings = deduplicateBookings([
-      ...bookingDocuments,
-      ...embeddedBookings,
-    ]);
+const mergedBookings = mergeUserBookingData(
+  bookingDocuments,
+  embeddedBookings
+);
+
+const userBookings = deduplicateBookings([
+  ...mergedBookings,
+  ...embeddedBookings,
+]);
 
     if (!userBookings.length) {
       return NextResponse.json({

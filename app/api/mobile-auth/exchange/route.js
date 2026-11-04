@@ -52,16 +52,17 @@ export async function GET(req) {
       secret: process.env.AUTH_SECRET,
       maxAge: SESSION_MAX_AGE,
       token: {
-        sub: user.id,
-        id: user.id,
-        name: user.name || "",
-        email: user.email || "",
-        phone: user.phone || "",
-        location: user.location || null,
-        address: user.address || null,
-        latitude: user.latitude || null,
-        longitude: user.longitude || null,
-      },
+  sub: user.id,
+  id: user.id,
+  name: user.name || "",
+  email: user.email || "",
+  phone: user.phone || "",
+  role: user.role || "",
+  location: user.location || null,
+  address: user.address || null,
+  latitude: user.latitude ?? null,
+  longitude: user.longitude ?? null,
+},
     });
 
     // Redirect the WebView to the website after setting its session cookie

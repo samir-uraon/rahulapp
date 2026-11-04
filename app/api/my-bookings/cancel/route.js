@@ -6,8 +6,9 @@ import { ObjectId } from "mongodb";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const runtime = "nodejs";
 
-const CANCELLATION_DELAY_MS = 2 * 60 * 60 * 1000;
+const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
 const CANCELLABLE_STATUSES = [
   "waiting",
@@ -16,59 +17,39 @@ const CANCELLABLE_STATUSES = [
   "pending",
 ];
 
+const BLOCKED_STATUSES = [
+  "cancelled",
+  "completed",
+  "serving",
+  "in-progress",
+  "skipped",
+  "refunded",
+  "failed",
+  "rejected",
+  "cancellation-processing",
+];
+
+const CANCELLATION_REASON = "Cancelled by patient";
+
+// --------------------------------------------------
+// COMMON HELPERS
+// --------------------------------------------------
+
+function jsonError(message, status = 400) {
+  return NextResponse.json(
+    {
+      success: false,
+      message,
+    },
+    { status }
+  );
+}
+
 function escapeRegex(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function buildUserQuery(token) {
-  const clauses = [];
-
-  const tokenId = String(token.id || token.sub || "").trim();
-  const subject = String(token.sub || "").trim();
-  const email = String(token.email || "").trim().toLowerCase();
-
-  for (const id of new Set([tokenId, subject].filter(Boolean))) {
-    clauses.push({ userId: id }, { user: id });
-
-    if (ObjectId.isValid(id) && id.length === 24) {
-      const objectId = new ObjectId(id);
-
-      clauses.push(
-        { userId: objectId },
-        { user: objectId }
-      );
-    }
-  }
-
-  if (email) {
-    const emailRegex = {
-      $regex: `^${escapeRegex(email)}$`,
-      $options: "i",
-    };
-
-    clauses.push(
-      { email: emailRegex },
-      { userEmail: emailRegex },
-      { userId: email },
-      { user: email }
-    );
-  }
-
-  return clauses;
-}
-
-function getIdentifierQuery(identifier) {
-  const values = [identifier];
-
-  if (ObjectId.isValid(identifier) && identifier.length === 24) {
-    values.push(new ObjectId(identifier));
-  }
-
-  return [
-    { _id: { $in: values } },
-    { bookingId: { $in: values } },
-    { bookingReference: { $in: values } },
-  ];
+  return String(value).replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
 }
 
 function normalizeStatus(status) {
@@ -80,91 +61,1060 @@ function normalizeStatus(status) {
 }
 
 function getCreatedAt(booking) {
-  const value = booking?.createdAt;
+  if (!booking?.createdAt) return null;
 
-  if (!value) return null;
-
-  const date = value instanceof Date ? value : new Date(value);
+  const date =
+    booking.createdAt instanceof Date
+      ? booking.createdAt
+      : new Date(booking.createdAt);
 
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function jsonError(message, status) {
-  return NextResponse.json(
-    {
-      success: false,
-      message,
-    },
-    { status }
-  );
-}
-
-function getCancellationTime(createdAt) {
-  return new Date(createdAt.getTime() + CANCELLATION_DELAY_MS);
-}
-
-function getRemainingMinutes(createdAt, now) {
-  const remainingMs =
-    CANCELLATION_DELAY_MS - (now.getTime() - createdAt.getTime());
-
-  return Math.max(0, Math.ceil(remainingMs / 60000));
-}
-
-function cancellationNotAvailableResponse(createdAt, now) {
-  const remainingMinutes = getRemainingMinutes(createdAt, now);
-
-  return NextResponse.json(
-    {
-      success: false,
-      message: `Cancellation will be available after 2 hours from booking creation. Please try again in about ${remainingMinutes} minute(s).`,
-      availableAt: getCancellationTime(createdAt),
-    },
-    { status: 403 }
-  );
-}
-
 function isCancellable(status) {
-  return CANCELLABLE_STATUSES.includes(normalizeStatus(status));
-}
-
-function isCancellationPeriodOver(createdAt, now) {
-  return now.getTime() - createdAt.getTime() >= CANCELLATION_DELAY_MS;
-}
-
-function getEmbeddedBookingIdentifier(booking) {
-  return (
-    booking?._id ??
-    booking?.id ??
-    booking?.bookingId ??
-    booking?.bookingReference
+  return CANCELLABLE_STATUSES.includes(
+    normalizeStatus(status)
   );
 }
 
-function getEmbeddedIdentifierValues(identifier) {
-  const stringId = String(identifier);
-  const values = [stringId];
+function isWithinCancellationPeriod(createdAt, now) {
+  const elapsed =
+    now.getTime() - createdAt.getTime();
 
-  if (ObjectId.isValid(stringId) && stringId.length === 24) {
-    values.push(new ObjectId(stringId));
+  return (
+    elapsed >= 0 &&
+    elapsed <= TWO_HOURS_MS
+  );
+}
+
+// --------------------------------------------------
+// AUTHENTICATION
+// --------------------------------------------------
+
+function buildUserQuery(token) {
+  const clauses = [];
+
+  const ids = [
+    String(token.id || "").trim(),
+    String(token.sub || "").trim(),
+  ].filter(Boolean);
+
+  for (const id of new Set(ids)) {
+    clauses.push(
+      { userId: id },
+      { user: id }
+    );
+
+    if (ObjectId.isValid(id) && id.length === 24) {
+      const objectId = new ObjectId(id);
+
+      clauses.push(
+        { userId: objectId },
+        { user: objectId }
+      );
+    }
   }
 
-  return values;
+  const email = String(token.email || "")
+    .trim()
+    .toLowerCase();
+
+  if (email) {
+    const regex = {
+      $regex: `^${escapeRegex(email)}$`,
+      $options: "i",
+    };
+
+    clauses.push(
+      { email: regex },
+      { userEmail: regex },
+      { userId: email },
+      { user: email }
+    );
+  }
+
+  return clauses;
 }
 
-function successResponse(bookingId) {
+function buildUserDocumentQuery(token) {
+  const clauses = [];
+
+  const ids = [
+    String(token.id || "").trim(),
+    String(token.sub || "").trim(),
+  ].filter(Boolean);
+
+  for (const id of new Set(ids)) {
+    clauses.push({ _id: id });
+
+    if (ObjectId.isValid(id) && id.length === 24) {
+      clauses.push({
+        _id: new ObjectId(id),
+      });
+    }
+  }
+
+  const email = String(token.email || "")
+    .trim()
+    .toLowerCase();
+
+  if (email) {
+    clauses.push({
+      email: {
+        $regex: `^${escapeRegex(email)}$`,
+        $options: "i",
+      },
+    });
+  }
+
+  return clauses;
+}
+
+// --------------------------------------------------
+// BOOKING IDENTIFIERS
+// --------------------------------------------------
+
+function getIdentifierQuery(identifier) {
+  const values = [identifier];
+
+  if (
+    ObjectId.isValid(identifier) &&
+    identifier.length === 24
+  ) {
+    values.push(new ObjectId(identifier));
+  }
+
+  return [
+    { _id: { $in: values } },
+    { id: { $in: values } },
+    { bookingId: { $in: values } },
+    { bookingReference: { $in: values } },
+  ];
+}
+
+function getBookingIdentifiers(booking) {
+  return [
+    booking?._id,
+    booking?.id,
+    booking?.bookingId,
+    booking?.bookingReference,
+  ]
+    .filter(Boolean)
+    .map(String);
+}
+
+function getRazorpayPaymentId(booking) {
+  return (
+    booking?.razorpayPaymentId ||
+    booking?.paymentId ||
+    booking?.payment?.razorpayPaymentId ||
+    booking?.payment?.paymentId ||
+    booking?.razorpay?.paymentId ||
+    null
+  );
+}
+
+// --------------------------------------------------
+// RAZORPAY
+// --------------------------------------------------
+
+function getRazorpayCredentials() {
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+  if (!keyId || !keySecret) {
+    throw new Error(
+      "Razorpay credentials are not configured."
+    );
+  }
+
+  return {
+    authorization:
+      "Basic " +
+      Buffer.from(
+        `${keyId}:${keySecret}`
+      ).toString("base64"),
+  };
+}
+
+async function initiateRazorpayRefund(booking, now) {
+  const paymentId = getRazorpayPaymentId(booking);
+
+  const bookingPaymentStatus = String(
+    booking.paymentStatus ||
+    booking.payment?.status ||
+    ""
+  ).toLowerCase();
+
+  const paidStatuses = [
+    "paid",
+    "captured",
+    "success",
+    "successful",
+  ];
+
+  // No successful payment: no refund required.
+  if (
+    !paymentId &&
+    !paidStatuses.includes(bookingPaymentStatus)
+  ) {
+    return {
+      refundStatus: "not-applicable",
+      refundId: null,
+      refundAmount: null,
+      paymentStatus:
+        bookingPaymentStatus || "unpaid",
+    };
+  }
+
+  if (!paymentId) {
+    throw new Error(
+      "Payment was successful, but the Razorpay payment ID is missing. Please contact support."
+    );
+  }
+
+  const credentials = getRazorpayCredentials();
+
+  // Verify payment directly with Razorpay.
+  const paymentResponse = await fetch(
+    `https://api.razorpay.com/v1/payments/${encodeURIComponent(
+      paymentId
+    )}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: credentials.authorization,
+      },
+      cache: "no-store",
+    }
+  );
+
+  const paymentData = await paymentResponse.json();
+
+  if (!paymentResponse.ok) {
+    console.error(
+      "Razorpay payment verification failed:",
+      paymentData
+    );
+
+    throw new Error(
+      paymentData.error?.description ||
+      "Unable to verify your payment with Razorpay."
+    );
+  }
+
+  // Only captured payments can be refunded.
+  if (paymentData.status !== "captured") {
+    return {
+      refundStatus: "not-applicable",
+      refundId: null,
+      refundAmount: null,
+      paymentStatus: paymentData.status,
+    };
+  }
+
+  // Full refund: no amount means the full captured amount.
+  const refundResponse = await fetch(
+    `https://api.razorpay.com/v1/payments/${encodeURIComponent(
+      paymentId
+    )}/refund`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: credentials.authorization,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        notes: {
+          reason: CANCELLATION_REASON,
+          bookingReference: String(
+            booking.bookingReference ||
+            booking.bookingId ||
+            booking._id ||
+            ""
+          ),
+          requestedAt: now.toISOString(),
+        },
+      }),
+      cache: "no-store",
+    }
+  );
+
+  const refundData = await refundResponse.json();
+
+  if (!refundResponse.ok) {
+    console.error(
+      "Razorpay refund failed:",
+      refundData
+    );
+
+    throw new Error(
+      refundData.error?.description ||
+      "Unable to initiate refund. Please contact support if the issue continues."
+    );
+  }
+
+  if (!refundData.id) {
+    throw new Error(
+      "Razorpay did not return a refund ID. Please verify the refund in your Razorpay dashboard."
+    );
+  }
+
+  return {
+    refundStatus: refundData.status || "pending",
+    refundId: refundData.id,
+
+    // Razorpay amounts are in paise.
+    refundAmount:
+      typeof refundData.amount === "number"
+        ? refundData.amount
+        : paymentData.amount,
+
+    paymentStatus: paymentData.status,
+    refundInitiatedAt: now,
+    refundExpectedDays: "3-4 working days",
+  };
+}
+
+// --------------------------------------------------
+// REFUND RECORD CREATION
+// --------------------------------------------------
+
+function createRefundRecord({
+  booking,
+  user,
+  refund,
+  now,
+}) {
+  const paymentId = getRazorpayPaymentId(booking);
+
+  const appointmentDate =
+    booking.bookingDate ||
+    booking.appointmentDate ||
+    booking.date ||
+    booking.appointment?.date ||
+    null;
+
+  const appointmentTime =
+    booking.bookingTime ||
+    booking.time ||
+    booking.appointmentTime ||
+    booking.appointment?.time ||
+    null;
+
+  return {
+    refundId: refund.refundId,
+    refundStatus: refund.refundStatus,
+
+    // Amount is stored in paise.
+    refundAmount: refund.refundAmount,
+    currency: "INR",
+
+    refundInitiatedAt:
+      refund.refundInitiatedAt || now,
+
+    refundExpectedDays:
+      refund.refundExpectedDays || null,
+
+    // User details
+    userId: String(
+      user?._id ||
+      booking.userId ||
+      booking.user ||
+      ""
+    ),
+
+    userName:
+      user?.name ||
+      booking.userName ||
+      booking.patient?.name ||
+      booking.patientName ||
+      null,
+
+    userEmail:
+      user?.email ||
+      booking.userEmail ||
+      booking.email ||
+      null,
+
+    userPhone:
+      user?.phone ||
+      user?.mobile ||
+      booking.phone ||
+      booking.patient?.phone ||
+      null,
+
+    // Booking details
+    bookingId: String(
+      booking._id ||
+      booking.bookingId ||
+      ""
+    ),
+
+    bookingReference:
+      booking.bookingReference || null,
+
+    clinicId:
+      booking.clinicId ||
+      booking.clinic?._id ||
+      null,
+
+    clinicName:
+      booking.clinicName ||
+      booking.clinic?.name ||
+      null,
+
+    doctorId:
+      booking.doctorId ||
+      booking.doctor?._id ||
+      null,
+
+    doctorName:
+      booking.doctorName ||
+      booking.doctor?.name ||
+      null,
+
+    patient:
+      booking.patient || {
+        name:
+          booking.patientName ||
+          user?.name ||
+          null,
+        phone:
+          booking.phone ||
+          user?.phone ||
+          null,
+      },
+
+    appointment: {
+      date: appointmentDate,
+      time: appointmentTime,
+      slot:
+        booking.slot ||
+        booking.selectedSlot ||
+        null,
+    },
+
+    // Payment details
+    paymentId,
+    razorpayPaymentId: paymentId,
+
+    razorpayOrderId:
+      booking.razorpayOrderId ||
+      booking.orderId ||
+      booking.payment?.orderId ||
+      null,
+
+    originalPaymentAmount:
+      booking.amount ??
+      booking.payment?.amount ??
+      null,
+
+    paymentStatus: "refunded",
+
+    cancellationReason: CANCELLATION_REASON,
+
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+// --------------------------------------------------
+// UPDATE USERS EMBEDDED BOOKING
+// --------------------------------------------------
+
+async function updateEmbeddedBooking({
+  users,
+  user,
+  booking,
+  refund,
+  now,
+}) {
+  if (!user?._id) return;
+
+  const identifiers = getBookingIdentifiers(booking);
+
+  if (!identifiers.length) return;
+
+  const identifierClauses = [];
+
+  for (const identifier of identifiers) {
+    const values = [identifier];
+
+    if (
+      ObjectId.isValid(identifier) &&
+      identifier.length === 24
+    ) {
+      values.push(new ObjectId(identifier));
+    }
+
+    identifierClauses.push(
+      { _id: { $in: values } },
+      { id: { $in: values } },
+      { bookingId: { $in: values } },
+      { bookingReference: { $in: values } }
+    );
+  }
+
+  await users.updateOne(
+    {
+      _id: user._id,
+      bookings: {
+        $elemMatch: {
+          $or: identifierClauses,
+        },
+      },
+    },
+    {
+      $set: {
+        "bookings.$.status": "cancelled",
+        "bookings.$.cancelledAt": now,
+        "bookings.$.updatedAt": now,
+        "bookings.$.cancellationReason":
+          CANCELLATION_REASON,
+
+        "bookings.$.paymentStatus":
+          refund.paymentStatus,
+
+        "bookings.$.refundStatus":
+          refund.refundStatus,
+
+        "bookings.$.refundId":
+          refund.refundId,
+
+        "bookings.$.refundAmount":
+          refund.refundAmount,
+
+        "bookings.$.refundInitiatedAt":
+          refund.refundInitiatedAt || null,
+
+        "bookings.$.refundExpectedDays":
+          refund.refundExpectedDays || null,
+      },
+    }
+  );
+}
+
+// --------------------------------------------------
+// SAVE REFUND IN ALL COLLECTIONS
+// --------------------------------------------------
+
+async function persistRefundRecords({
+  db,
+  booking,
+  user,
+  refund,
+  now,
+}) {
+  // Do not create refund history for unpaid bookings.
+  if (
+    refund.refundStatus === "not-applicable" ||
+    !refund.refundId
+  ) {
+    return;
+  }
+
+  const refundsCollection =
+    db.collection("refunds");
+
+  const paymentRecordCollection =
+    db.collection("paymentRecord");
+
+  const usersCollection =
+    db.collection("users");
+
+  const refundRecord = createRefundRecord({
+    booking,
+    user,
+    refund,
+    now,
+  });
+
+  // 1. REFUNDS COLLECTION
+  // One document per Razorpay refund ID.
+  const { createdAt, ...refundFields } = refundRecord;
+
+  await refundsCollection.updateOne(
+    {
+      refundId: refund.refundId,
+    },
+    {
+      $set: {
+        ...refundFields,
+        updatedAt: now,
+      },
+      $setOnInsert: {
+        createdAt,
+      },
+    },
+    {
+      upsert: true,
+    }
+  );
+
+  // 2. PAYMENT RECORD COLLECTION
+  const paymentId = getRazorpayPaymentId(booking);
+
+  const paymentConditions = [];
+
+  if (paymentId) {
+    paymentConditions.push(
+      { paymentId },
+      { razorpayPaymentId: paymentId }
+    );
+  }
+
+  if (booking.bookingReference) {
+    paymentConditions.push({
+      bookingReference: booking.bookingReference,
+    });
+  }
+
+  if (paymentConditions.length) {
+    await paymentRecordCollection.updateMany(
+      {
+        $or: paymentConditions,
+      },
+      {
+        $set: {
+          paymentStatus: "refunded",
+          status: "refunded",
+
+          refundStatus: refund.refundStatus,
+          refundId: refund.refundId,
+          refundAmount: refund.refundAmount,
+
+          refundInitiatedAt:
+            refund.refundInitiatedAt || now,
+
+          refundExpectedDays:
+            refund.refundExpectedDays || null,
+
+          updatedAt: now,
+        },
+      }
+    );
+  }
+
+  // 3. USERS COLLECTION
+  if (user?._id) {
+    await usersCollection.updateOne(
+      {
+        _id: user._id,
+      },
+      {
+        $addToSet: {
+          refunds: refundRecord,
+        },
+      }
+    );
+
+    // Update matching embedded booking, if it exists.
+    await updateEmbeddedBooking({
+      users: usersCollection,
+      user,
+      booking,
+      refund,
+      now,
+    });
+  }
+}
+
+// --------------------------------------------------
+// SUCCESS RESPONSE
+// --------------------------------------------------
+
+function successResponse(bookingId, refund) {
+  const hasRefund =
+    refund.refundStatus !== "not-applicable";
+
   return NextResponse.json({
     success: true,
-    message: "Booking cancelled successfully.",
+
+    message: hasRefund
+      ? "Booking cancelled and refund initiated successfully."
+      : "Booking cancelled successfully. No refund was applicable.",
+
     bookingId,
     status: "cancelled",
+    cancelledAt: new Date(),
+
+    refundStatus: refund.refundStatus,
+    refundId: refund.refundId,
+    refundAmount: refund.refundAmount,
+
+    refundInitiatedAt:
+      refund.refundInitiatedAt || null,
+
+    refundExpectedDays:
+      refund.refundExpectedDays || null,
+
+    paymentStatus: refund.paymentStatus,
   });
 }
 
+// --------------------------------------------------
+// DEDICATED BOOKINGS COLLECTION CANCELLATION
+// --------------------------------------------------
+
+async function cancelDedicatedBooking({
+  db,
+  bookings,
+  booking,
+  ownerClauses,
+  user,
+  now,
+}) {
+  const status = normalizeStatus(booking.status);
+
+  if (
+    BLOCKED_STATUSES.includes(status) ||
+    !isCancellable(status)
+  ) {
+    return jsonError(
+      "This booking can no longer be cancelled.",
+      409
+    );
+  }
+
+  const createdAt = getCreatedAt(booking);
+
+  if (!createdAt) {
+    return jsonError(
+      "Booking creation time is missing or invalid.",
+      409
+    );
+  }
+
+  if (!isWithinCancellationPeriod(createdAt, now)) {
+    return NextResponse.json(
+      {
+        success: false,
+        message:
+          "The 2-hour cancellation period has expired. Cancellation and refund are no longer available.",
+      },
+      { status: 403 }
+    );
+  }
+
+  const bookingId = String(
+    booking._id ||
+    booking.bookingId ||
+    booking.bookingReference
+  );
+
+  // Atomically claim the booking.
+  const claim = await bookings.updateOne(
+    {
+      _id: booking._id,
+      $and: [
+        { $or: ownerClauses },
+        { status: booking.status },
+        { createdAt: booking.createdAt },
+      ],
+    },
+    {
+      $set: {
+        status: "cancellation-processing",
+        cancellationProcessingAt: now,
+      },
+    }
+  );
+
+  if (claim.modifiedCount !== 1) {
+    return jsonError(
+      "This booking is already being processed or has changed. Please refresh.",
+      409
+    );
+  }
+
+  let refund = null;
+
+  try {
+    // Initiate refund through Razorpay.
+    refund = await initiateRazorpayRefund(
+      booking,
+      now
+    );
+
+    // Save refund details in refunds, paymentRecord and users.
+    await persistRefundRecords({
+      db,
+      booking,
+      user,
+      refund,
+      now,
+    });
+
+    // Finalize original booking.
+    const result = await bookings.updateOne(
+      {
+        _id: booking._id,
+        status: "cancellation-processing",
+      },
+      {
+        $set: {
+          status: "cancelled",
+          cancelledAt: now,
+          updatedAt: now,
+          cancellationReason: CANCELLATION_REASON,
+
+          paymentStatus: refund.paymentStatus,
+
+          refundStatus: refund.refundStatus,
+          refundId: refund.refundId,
+          refundAmount: refund.refundAmount,
+
+          refundInitiatedAt:
+            refund.refundInitiatedAt || null,
+
+          refundExpectedDays:
+            refund.refundExpectedDays || null,
+        },
+        $unset: {
+          cancellationProcessingAt: "",
+        },
+      }
+    );
+
+    if (result.modifiedCount !== 1) {
+      console.error(
+        "Refund initiated but booking finalization failed:",
+        bookingId,
+        refund.refundId
+      );
+
+      return jsonError(
+        "Refund was initiated, but booking status could not be updated. Please contact support with booking reference " +
+          bookingId,
+        500
+      );
+    }
+
+    return successResponse(bookingId, refund);
+  } catch (error) {
+    // If Razorpay has already returned a refund ID,
+    // DO NOT restore the original status.
+    // This prevents a second refund attempt.
+    if (!refund?.refundId) {
+      await bookings.updateOne(
+        {
+          _id: booking._id,
+          status: "cancellation-processing",
+        },
+        {
+          $set: {
+            status: booking.status,
+          },
+          $unset: {
+            cancellationProcessingAt: "",
+          },
+        }
+      );
+    }
+
+    throw error;
+  }
+}
+
+// --------------------------------------------------
+// LEGACY USERS.BOOKINGS CANCELLATION
+// --------------------------------------------------
+
+async function cancelEmbeddedBooking({
+  db,
+  users,
+  user,
+  embeddedBooking,
+  bookingId,
+  now,
+}) {
+  const status = normalizeStatus(
+    embeddedBooking.status
+  );
+
+  if (
+    BLOCKED_STATUSES.includes(status) ||
+    !isCancellable(status)
+  ) {
+    return jsonError(
+      "This booking can no longer be cancelled.",
+      409
+    );
+  }
+
+  const createdAt = getCreatedAt(embeddedBooking);
+
+  if (!createdAt) {
+    return jsonError(
+      "Booking creation time is missing or invalid.",
+      409
+    );
+  }
+
+  if (!isWithinCancellationPeriod(createdAt, now)) {
+    return NextResponse.json(
+      {
+        success: false,
+        message:
+          "The 2-hour cancellation period has expired. Cancellation and refund are no longer available.",
+      },
+      { status: 403 }
+    );
+  }
+
+  const identifierClauses =
+    getIdentifierQuery(bookingId);
+
+  const elementMatch = {
+    $and: [
+      { $or: identifierClauses },
+      { status: embeddedBooking.status },
+      { createdAt: embeddedBooking.createdAt },
+    ],
+  };
+
+  // Claim the embedded booking.
+  const claim = await users.updateOne(
+    {
+      _id: user._id,
+      bookings: {
+        $elemMatch: elementMatch,
+      },
+    },
+    {
+      $set: {
+        "bookings.$.status":
+          "cancellation-processing",
+
+        "bookings.$.cancellationProcessingAt": now,
+      },
+    }
+  );
+
+  if (claim.modifiedCount !== 1) {
+    return jsonError(
+      "This booking is already being processed or has changed.",
+      409
+    );
+  }
+
+  let refund = null;
+
+  try {
+    refund = await initiateRazorpayRefund(
+      embeddedBooking,
+      now
+    );
+
+    // Save the refund in the other collections too.
+    await persistRefundRecords({
+      db,
+      booking: embeddedBooking,
+      user,
+      refund,
+      now,
+    });
+
+    // Finalize embedded booking.
+    const result = await users.updateOne(
+      {
+        _id: user._id,
+        bookings: {
+          $elemMatch: {
+            $and: [
+              { $or: identifierClauses },
+              { status: "cancellation-processing" },
+            ],
+          },
+        },
+      },
+      {
+        $set: {
+          "bookings.$.status": "cancelled",
+          "bookings.$.cancelledAt": now,
+          "bookings.$.updatedAt": now,
+
+          "bookings.$.cancellationReason":
+            CANCELLATION_REASON,
+
+          "bookings.$.paymentStatus":
+            refund.paymentStatus,
+
+          "bookings.$.refundStatus":
+            refund.refundStatus,
+
+          "bookings.$.refundId":
+            refund.refundId,
+
+          "bookings.$.refundAmount":
+            refund.refundAmount,
+
+          "bookings.$.refundInitiatedAt":
+            refund.refundInitiatedAt || null,
+
+          "bookings.$.refundExpectedDays":
+            refund.refundExpectedDays || null,
+        },
+        $unset: {
+          "bookings.$.cancellationProcessingAt": "",
+        },
+      }
+    );
+
+    if (result.modifiedCount !== 1) {
+      console.error(
+        "Embedded booking finalization failed:",
+        bookingId,
+        refund.refundId
+      );
+
+      return jsonError(
+        "Refund was initiated, but booking status could not be updated. Please contact support.",
+        500
+      );
+    }
+
+    return successResponse(bookingId, refund);
+  } catch (error) {
+    if (!refund?.refundId) {
+      await users.updateOne(
+        {
+          _id: user._id,
+          bookings: {
+            $elemMatch: {
+              $and: [
+                { $or: identifierClauses },
+                { status: "cancellation-processing" },
+              ],
+            },
+          },
+        },
+        {
+          $set: {
+            "bookings.$.status":
+              embeddedBooking.status,
+          },
+          $unset: {
+            "bookings.$.cancellationProcessingAt": "",
+          },
+        }
+      );
+    }
+
+    throw error;
+  }
+}
+
+// --------------------------------------------------
+// POST /api/my-bookings/cancel
+// --------------------------------------------------
+
 export async function POST(request) {
   try {
-    // Authentication configuration
     const secret =
-      process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+      process.env.AUTH_SECRET ||
+      process.env.NEXTAUTH_SECRET;
 
     if (!secret) {
       return jsonError(
@@ -173,7 +1123,6 @@ export async function POST(request) {
       );
     }
 
-    // Verify login
     const token = await getToken({
       req: request,
       secret,
@@ -186,7 +1135,6 @@ export async function POST(request) {
       );
     }
 
-    // Database configuration
     if (!process.env.MONGODB) {
       return jsonError(
         "Database configuration is missing.",
@@ -194,11 +1142,13 @@ export async function POST(request) {
       );
     }
 
-    // Validate request
     const body = await request.json().catch(() => ({}));
 
     const bookingId = String(
-      body.bookingId || body.id || ""
+      body.bookingId ||
+      body.id ||
+      body._id ||
+      ""
     ).trim();
 
     if (!bookingId || bookingId.length > 200) {
@@ -208,236 +1158,88 @@ export async function POST(request) {
       );
     }
 
-    // Identify the authenticated user
     const ownerClauses = buildUserQuery(token);
 
-    if (!ownerClauses.length) {
+    const userDocumentClauses =
+      buildUserDocumentQuery(token);
+
+    if (
+      !ownerClauses.length ||
+      !userDocumentClauses.length
+    ) {
       return jsonError(
         "Unable to identify your account.",
         400
       );
     }
 
-    const now = new Date();
-
-    const cancellationCutoff = new Date(
-      now.getTime() - CANCELLATION_DELAY_MS
-    );
-
-    const identifierClauses = getIdentifierQuery(bookingId);
-
-    // Connect database
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
 
     const bookings = db.collection("bookings");
     const users = db.collection("users");
 
-    // --------------------------------------------------
-    // 1. Check dedicated bookings collection
-    // --------------------------------------------------
+    const now = new Date();
 
-    const bookingQuery = {
-      $and: [
-        { $or: ownerClauses },
-        { $or: identifierClauses },
-      ],
-    };
-
-    const booking = await bookings.findOne(bookingQuery);
-
-    if (booking) {
-      const status = normalizeStatus(booking.status);
-
-      if (!isCancellable(status)) {
-        return jsonError(
-          "This booking can no longer be cancelled because its status has changed.",
-          409
-        );
-      }
-
-      const createdAt = getCreatedAt(booking);
-
-      if (!createdAt) {
-        return jsonError(
-          "This booking does not have a valid creation time, so it cannot be cancelled online.",
-          409
-        );
-      }
-
-      // Enforce the 2-hour cancellation restriction
-      if (!isCancellationPeriodOver(createdAt, now)) {
-        return cancellationNotAvailableResponse(
-          createdAt,
-          now
-        );
-      }
-
-      // Atomic update:
-      // Ensure the booking still belongs to the user,
-      // still has its original status, and is old enough.
-      const updateResult = await bookings.updateOne(
-        {
-          _id: booking._id,
-
-          $and: [
-            { $or: ownerClauses },
-
-            // Match the exact original status to prevent
-            // overwriting a concurrent status change.
-            { status: booking.status },
-
-            { createdAt: { $lte: cancellationCutoff } },
-          ],
-        },
-        {
-          $set: {
-            status: "cancelled",
-            cancelledAt: now,
-            updatedAt: now,
-            cancellationReason: "Cancelled by patient",
-          },
-        }
-      );
-
-      if (updateResult.modifiedCount !== 1) {
-        return jsonError(
-          "The booking could not be cancelled. It may have changed; please refresh and try again.",
-          409
-        );
-      }
-
-      return successResponse(bookingId);
-    }
-
-    // --------------------------------------------------
-    // 2. Fallback for legacy users.bookings records
-    // --------------------------------------------------
-
+    // Find the logged-in user's document.
     const user = await users.findOne({
-      $or: ownerClauses,
+      $or: userDocumentClauses,
     });
 
+    // ------------------------------------------------
+    // FIRST: CHECK DEDICATED BOOKINGS COLLECTION
+    // ------------------------------------------------
+
+    const booking = await bookings.findOne({
+      $and: [
+        { $or: ownerClauses },
+        { $or: getIdentifierQuery(bookingId) },
+      ],
+    });
+
+    if (booking) {
+      return await cancelDedicatedBooking({
+        db,
+        bookings,
+        booking,
+        ownerClauses,
+        user,
+        now,
+      });
+    }
+
+    // ------------------------------------------------
+    // SECOND: CHECK USERS.BOOKINGS
+    // ------------------------------------------------
+
     if (user && Array.isArray(user.bookings)) {
-      const matchesIdentifier = (item) => {
-        const ids = [
-          item?._id,
-          item?.id,
-          item?.bookingId,
-          item?.bookingReference,
-        ]
-          .filter(
-            (value) =>
-              value !== null && value !== undefined
-          )
-          .map(String);
-
-        return ids.includes(bookingId);
-      };
-
       const embeddedBooking = user.bookings.find(
-        matchesIdentifier
+        (item) => {
+          if (
+            !item ||
+            typeof item !== "object" ||
+            Array.isArray(item)
+          ) {
+            return false;
+          }
+
+          return getBookingIdentifiers(item).includes(
+            bookingId
+          );
+        }
       );
 
       if (embeddedBooking) {
-        const status = normalizeStatus(
-          embeddedBooking.status
-        );
-
-        if (!isCancellable(status)) {
-          return jsonError(
-            "This booking can no longer be cancelled because its status has changed.",
-            409
-          );
-        }
-
-        const createdAt = getCreatedAt(embeddedBooking);
-
-        if (!createdAt) {
-          return jsonError(
-            "This booking does not have a valid creation time, so it cannot be cancelled online.",
-            409
-          );
-        }
-
-        // Enforce the same 2-hour restriction
-        if (!isCancellationPeriodOver(createdAt, now)) {
-          return cancellationNotAvailableResponse(
-            createdAt,
-            now
-          );
-        }
-
-        const embeddedId =
-          getEmbeddedBookingIdentifier(embeddedBooking);
-
-        if (
-          embeddedId === null ||
-          embeddedId === undefined
-        ) {
-          return jsonError(
-            "The booking does not have a valid identifier.",
-            409
-          );
-        }
-
-        const embeddedValues =
-          getEmbeddedIdentifierValues(embeddedId);
-
-        // Atomic embedded booking update
-        const updateResult = await users.updateOne(
-          {
-            _id: user._id,
-
-            bookings: {
-              $elemMatch: {
-                $and: [
-                  {
-                    $or: [
-                      { _id: { $in: embeddedValues } },
-                      { id: { $in: embeddedValues } },
-                      { bookingId: { $in: embeddedValues } },
-                      {
-                        bookingReference: {
-                          $in: embeddedValues,
-                        },
-                      },
-                    ],
-                  },
-
-                  // Match the original status
-                  { status: embeddedBooking.status },
-
-                  { createdAt: { $lte: cancellationCutoff } },
-                ],
-              },
-            },
-          },
-          {
-            $set: {
-              "bookings.$.status": "cancelled",
-              "bookings.$.cancelledAt": now,
-              "bookings.$.updatedAt": now,
-              "bookings.$.cancellationReason":
-                "Cancelled by patient",
-            },
-          }
-        );
-
-        if (updateResult.modifiedCount !== 1) {
-          return jsonError(
-            "The booking could not be cancelled. It may have changed; please refresh and try again.",
-            409
-          );
-        }
-
-        return successResponse(bookingId);
+        return await cancelEmbeddedBooking({
+          db,
+          users,
+          user,
+          embeddedBooking,
+          bookingId,
+          now,
+        });
       }
     }
-
-    // --------------------------------------------------
-    // 3. Booking not found
-    // --------------------------------------------------
 
     return jsonError(
       "Booking not found or you do not have permission to cancel it.",
@@ -452,12 +1254,9 @@ export async function POST(request) {
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to cancel booking.",
-
-        error:
-          process.env.NODE_ENV === "development"
-            ? error?.message || String(error)
-            : undefined,
+        message:
+          error?.message ||
+          "Failed to cancel booking.",
       },
       { status: 500 }
     );

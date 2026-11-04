@@ -6,7 +6,7 @@ import clientPromise from "@/lib/mongodb";
 
 export const runtime = "nodejs";
 
-const APP_CALLBACK = "zeriy://auth/callback";
+const APP_CALLBACK = "zeriy:///auth/callback";
 
 export async function GET(req) {
   try {
@@ -51,15 +51,16 @@ export async function GET(req) {
     await db.collection("mobile_auth_codes").insertOne({
       codeHash,
       user: {
-        id: String(userId),
-        name: token.name || "",
-        email: token.email || "",
-        phone: token.phone || "",
-        location: token.location || null,
-        address: token.address || null,
-        latitude: token.latitude || null,
-        longitude: token.longitude || null,
-      },
+  id: String(userId),
+  name: token.name || "",
+  email: token.email || "",
+  phone: token.phone || "",
+  role: token.role || "",
+  location: token.location || null,
+  address: token.address || null,
+  latitude: token.latitude ?? null,
+  longitude: token.longitude ?? null,
+},
       expiresAt,
       createdAt: new Date(),
     });
