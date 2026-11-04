@@ -1173,12 +1173,12 @@ const refundStatus =
   data.booking?.refundStatus || data.refundStatus;
 
 if (refundStatus === "initiated" || refundStatus === "processing") {
-  window.alert(
+  toast.success(
     "Booking cancelled successfully!\n\n" +
     "Your refund has been initiated. It should be credited within 3–4 working days."
   );
 } else {
-  window.alert("Booking cancelled successfully.");
+  toast.success("Booking cancelled successfully.");
 }
 
 await fetchBookings(true, true);

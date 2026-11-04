@@ -1,3 +1,4 @@
+
 "use client";
 
 import {
@@ -6,11 +7,13 @@ import {
   useMemo,
   useState,
 } from "react";
+
 import {
   useParams,
   useRouter,
   useSearchParams,
 } from "next/navigation";
+
 import { useSession } from "next-auth/react";
 
 import Header from "@/components/Header";
@@ -45,7 +48,6 @@ const CATEGORIES = {
   "diagnostic-centre": "diagnostic",
 };
 
-// Normalize a MongoDB doctor ID to a string.
 function getDoctorId(doctor) {
   const value = doctor?._id ?? doctor?.id;
 
@@ -68,15 +70,19 @@ function getDoctorId(doctor) {
   return String(value);
 }
 
-// Handles schedule keys such as Monday or monday and checks doctor holidays.
 function getDoctorDaySchedule(doctor, dayKey, dateValue) {
-  // If doctor is on holiday on this date, deactivate schedule
   if (
     dateValue &&
     Array.isArray(doctor?.holidayDates) &&
-    doctor.holidayDates.includes(dateValue)
+    doctor.holidayDates.some(
+      (date) => normalizeDate(date) === dateValue
+    )
   ) {
-    return { active: false, slots: [], isHoliday: true };
+    return {
+      active: false,
+      slots: [],
+      isHoliday: true,
+    };
   }
 
   const schedule = doctor?.schedule;
@@ -154,7 +160,13 @@ function formatTime(value) {
   if (minutes === null) return String(value);
 
   const date = new Date(2000, 0, 1);
-  date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+
+  date.setHours(
+    Math.floor(minutes / 60),
+    minutes % 60,
+    0,
+    0
+  );
 
   return date.toLocaleTimeString("en-IN", {
     hour: "numeric",
@@ -303,14 +315,15 @@ function getSlotCapacityInfo(
 
     const bookingDate = normalizeDate(
       booking.date ??
-        booking.appointmentDate ??
-        booking.bookingDate
+      booking.appointmentDate ??
+      booking.bookingDate
     );
 
     const bookingSlot = getBookingSlot(booking);
 
     const bookingOpen = parseSlotMinutes(bookingSlot.open);
     const bookingClose = parseSlotMinutes(bookingSlot.close);
+
     const slotOpen = parseSlotMinutes(slot.open);
     const slotClose = parseSlotMinutes(slot.close);
 
@@ -353,6 +366,7 @@ function getSlotCapacityInfo(
 
 function getAvailableDates(doctor) {
   const dates = [];
+
   const indiaDate = getIndiaDateTime().date;
   const [year, month, day] = indiaDate.split("-").map(Number);
 
@@ -360,11 +374,17 @@ function getAvailableDates(doctor) {
 
   for (let i = 0; i < 14; i++) {
     const date = new Date(today);
+
     date.setDate(today.getDate() + i);
 
     const value = getDateValue(date);
     const dayKey = dayNames[date.getDay()];
-    const doctorSchedule = getDoctorDaySchedule(doctor, dayKey, value);
+
+    const doctorSchedule = getDoctorDaySchedule(
+      doctor,
+      dayKey,
+      value
+    );
 
     const isHoliday = doctorSchedule?.isHoliday === true;
 
@@ -427,6 +447,7 @@ function loadRazorpayScript() {
     }
 
     const script = document.createElement("script");
+
     script.src = scriptUrl;
     script.async = true;
 
@@ -480,19 +501,33 @@ export default function ClinicBookingPage() {
   const [refreshingBookings, setRefreshingBookings] = useState(false);
   const [bookingRefreshKey, setBookingRefreshKey] = useState(0);
 
-  const [patientName, setPatientName] = useState(session?.user?.name);
+  const [patientName, setPatientName] = useState(
+    session?.user?.name || ""
+  );
+
   const [age, setAge] = useState("");
   const [gender, setGender] = useState("Male");
 
-const [appointmentDate, setAppointmentDate] = useState(
-  () => getIndiaDateTime().date
-);
+  // Automatically initialize today's date using India timezone.
+  const [appointmentDate, setAppointmentDate] = useState(
+    () => getIndiaDateTime().date
+  );
+
   const [appointmentTime, setAppointmentTime] = useState("");
 
   const [error, setError] = useState("");
   const [isPaying, setIsPaying] = useState(false);
 
-  // Load business and filtered doctor from the clinic API.
+  // Update patient name when the session becomes available.
+  useEffect(() => {
+    if (session?.user?.name) {
+      setPatientName((previous) =>
+        previous || session.user.name
+      );
+    }
+  }, [session?.user?.name]);
+
+  // Load clinic and doctor details.
   useEffect(() => {
     let cancelled = false;
 
@@ -529,7 +564,9 @@ const [appointmentDate, setAppointmentDate] = useState(
           );
         }
       } finally {
-        if (!cancelled) setLoadingClinic(false);
+        if (!cancelled) {
+          setLoadingClinic(false);
+        }
       }
     }
 
@@ -540,27 +577,7 @@ const [appointmentDate, setAppointmentDate] = useState(
     };
   }, [clinicId, doctorId]);
 
-
-  useEffect(() => {
-  if (!availableDates.length) return;
-
-  const currentDateExists = availableDates.some(
-    (date) => date.value === appointmentDate
-  );
-
-  if (currentDateExists) return;
-
-  const firstAvailableDate = availableDates.find(
-    (date) => !date.isClosed
-  );
-
-  setAppointmentDate(
-    firstAvailableDate?.value || availableDates[0].value
-  );
-}, [availableDates, appointmentDate]);
-
-
-  // Match doctor directly from clinic.doctors.
+  // Match doctor from clinic.doctors.
   const doctor = useMemo(
     () =>
       clinic?.doctors?.find(
@@ -573,85 +590,68 @@ const [appointmentDate, setAppointmentDate] = useState(
 
   const normalizedDoctorId = getDoctorId(doctor);
 
-  const fetchBookings = useCallback(
-    async ({ silent = false } = {}) => {
-      if (
-        !clinicId ||
-        !normalizedDoctorId ||
-        !appointmentDate ||
-        !collectionName
-      ) {
-        setBookings([]);
-        setBookingsError("");
-        return false;
-      }
-
-      if (silent) {
-        setRefreshingBookings(true);
-      } else {
-        setLoadingBookings(true);
-      }
-
-      setBookingsError("");
-
-      try {
-        const query = new URLSearchParams({
-          clinicId: String(clinicId),
-          doctorId: normalizedDoctorId,
-          date: appointmentDate,
-          category,
-        });
-
-        const response = await fetch(
-          `/api/bookings?${query.toString()}`,
-          {
-            method: "GET",
-            cache: "no-store",
-            headers: {
-              Accept: "application/json",
-            },
-          }
-        );
-
-        const data = await response.json();
-
-        if (!response.ok || data.success === false) {
-          throw new Error(
-            data.message || "Failed to fetch appointment bookings."
-          );
-        }
-
-        const records = extractBookings(data);
-
-        if (!records) {
-          throw new Error(
-            "The bookings API did not return a bookings array. Expected { success: true, bookings: [...] }."
-          );
-        }
-
-        setBookings(records);
-        return true;
-      } catch (err) {
-        setBookingsError(
-          err.message || "Unable to fetch appointment bookings."
-        );
-
-        return false;
-      } finally {
-        setLoadingBookings(false);
-        setRefreshingBookings(false);
-      }
-    },
-    [
-      clinicId,
-      normalizedDoctorId,
-      appointmentDate,
-      category,
-      collectionName,
-    ]
+  // Generate the next 14 available dates.
+  const availableDates = useMemo(
+    () => (doctor ? getAvailableDates(doctor) : []),
+    [doctor]
   );
 
-  // Fetch bookings for the selected date and doctor.
+  // IMPORTANT:
+  // This effect must come AFTER availableDates is declared.
+  // Keep today's date if it is available.
+  // Otherwise automatically select the first working date.
+  useEffect(() => {
+    if (!availableDates.length) return;
+
+    const currentDateInfo = availableDates.find(
+      (date) => date.value === appointmentDate
+    );
+
+    if (currentDateInfo && !currentDateInfo.isClosed) {
+      return;
+    }
+
+    const firstAvailableDate = availableDates.find(
+      (date) => !date.isClosed
+    );
+
+    const nextDate =
+      firstAvailableDate?.value ||
+      availableDates[0].value;
+
+    if (appointmentDate !== nextDate) {
+      setAppointmentDate(nextDate);
+      setAppointmentTime("");
+    }
+  }, [availableDates, appointmentDate]);
+
+  const selectedDateInfo = useMemo(
+    () =>
+      availableDates.find(
+        (item) => item.value === appointmentDate
+      ),
+    [availableDates, appointmentDate]
+  );
+
+  const selectedDoctorSchedule = useMemo(() => {
+    if (!doctor || !appointmentDate) return null;
+
+    const [year, month, day] = appointmentDate
+      .split("-")
+      .map(Number);
+
+    const selectedDate = new Date(year, month - 1, day);
+
+    const dayKey = dayNames[selectedDate.getDay()];
+
+    return getDoctorDaySchedule(
+      doctor,
+      dayKey,
+      appointmentDate
+    );
+  }, [doctor, appointmentDate]);
+
+  // Fetch bookings for the selected date.
   useEffect(() => {
     if (!appointmentDate || !clinicId || !normalizedDoctorId) {
       setBookings([]);
@@ -661,6 +661,7 @@ const [appointmentDate, setAppointmentDate] = useState(
     }
 
     let cancelled = false;
+
     const controller = new AbortController();
 
     async function loadBookings() {
@@ -711,7 +712,9 @@ const [appointmentDate, setAppointmentDate] = useState(
           );
         }
       } finally {
-        if (!cancelled) setLoadingBookings(false);
+        if (!cancelled) {
+          setLoadingBookings(false);
+        }
       }
     }
 
@@ -729,32 +732,7 @@ const [appointmentDate, setAppointmentDate] = useState(
     bookingRefreshKey,
   ]);
 
-  const availableDates = useMemo(
-    () => (doctor ? getAvailableDates(doctor) : []),
-    [doctor]
-  );
-
-  const selectedDateInfo = useMemo(
-    () =>
-      availableDates.find(
-        (item) => item.value === appointmentDate
-      ),
-    [availableDates, appointmentDate]
-  );
-
-  const selectedDoctorSchedule = useMemo(() => {
-    if (!doctor || !appointmentDate) return null;
-
-    const [year, month, day] = appointmentDate
-      .split("-")
-      .map(Number);
-
-    const selectedDate = new Date(year, month - 1, day);
-    const dayKey = dayNames[selectedDate.getDay()];
-
-    return getDoctorDaySchedule(doctor, dayKey, appointmentDate);
-  }, [doctor, appointmentDate]);
-
+  // Calculate available appointment slots.
   const availableTimes = useMemo(() => {
     if (
       !appointmentDate ||
@@ -764,8 +742,10 @@ const [appointmentDate, setAppointmentDate] = useState(
       return [];
     }
 
-    const { date: today, minutes: currentMinutes } =
-      getIndiaDateTime();
+    const {
+      date: today,
+      minutes: currentMinutes,
+    } = getIndiaDateTime();
 
     const isToday = appointmentDate === today;
 
@@ -780,6 +760,7 @@ const [appointmentDate, setAppointmentDate] = useState(
 
         if (slotEnd <= slotStart) return false;
 
+        // Hide expired slots for today.
         if (!isToday) return true;
 
         return slotEnd > currentMinutes;
@@ -809,6 +790,7 @@ const [appointmentDate, setAppointmentDate] = useState(
     normalizedDoctorId,
   ]);
 
+  // Clear selected time if it is no longer bookable.
   useEffect(() => {
     if (!appointmentTime) return;
 
@@ -840,8 +822,7 @@ const [appointmentDate, setAppointmentDate] = useState(
   );
 
   const isPageLoading =
-    status === "loading" ||
-    loadingClinic
+    status === "loading" || loadingClinic;
 
   const handleDateChange = (event) => {
     setAppointmentDate(event.target.value);
@@ -939,9 +920,11 @@ const [appointmentDate, setAppointmentDate] = useState(
 
     if (currentSlot.isFull) {
       setAppointmentTime("");
+
       setError(
         "This appointment slot is full. Please select another slot."
       );
+
       return false;
     }
 
@@ -949,6 +932,7 @@ const [appointmentDate, setAppointmentDate] = useState(
       setError(
         "Patient availability could not be verified. Please refresh the booking counts and try again."
       );
+
       return false;
     }
 
@@ -956,6 +940,7 @@ const [appointmentDate, setAppointmentDate] = useState(
       setError(
         "The booking charge is not configured for this doctor."
       );
+
       return false;
     }
 
@@ -964,12 +949,14 @@ const [appointmentDate, setAppointmentDate] = useState(
 
   const handlePayment = async () => {
     if (isPaying || isPageLoading) return;
+
     if (!validateForm()) return;
 
     setIsPaying(true);
     setError("");
 
     try {
+      // Fetch the latest booking counts before payment.
       const query = new URLSearchParams({
         clinicId: String(clinicId),
         doctorId: normalizedDoctorId,
@@ -996,7 +983,7 @@ const [appointmentDate, setAppointmentDate] = useState(
       ) {
         throw new Error(
           bookingsData.message ||
-            "Unable to verify current patient availability."
+          "Unable to verify current patient availability."
         );
       }
 
@@ -1030,13 +1017,16 @@ const [appointmentDate, setAppointmentDate] = useState(
 
       if (!latestCapacity.configured || latestCapacity.isFull) {
         setAppointmentTime("");
+
         throw new Error(
           "This appointment slot is full or its capacity is not configured. Please choose another slot."
         );
       }
 
-      const { date: today, minutes: currentMinutes } =
-        getIndiaDateTime();
+      const {
+        date: today,
+        minutes: currentMinutes,
+      } = getIndiaDateTime();
 
       const slotEnd = parseSlotMinutes(slot.close);
 
@@ -1047,11 +1037,13 @@ const [appointmentDate, setAppointmentDate] = useState(
           slotEnd <= currentMinutes)
       ) {
         setAppointmentTime("");
+
         throw new Error(
           "This appointment time has already passed. Please select another slot."
         );
       }
 
+      // Create Razorpay order.
       const orderResponse = await fetch(
         "/api/payment/create-order",
         {
@@ -1108,6 +1100,7 @@ const [appointmentDate, setAppointmentDate] = useState(
         currency: orderData.currency || "INR",
         name: "Zeric",
         description: `Appointment booking - ${doctor.name}`,
+
         order_id: orderData.orderId,
 
         prefill: {
@@ -1150,7 +1143,7 @@ const [appointmentDate, setAppointmentDate] = useState(
             if (!verifyResponse.ok || !verifyData.success) {
               setError(
                 verifyData.message ||
-                  "Payment verification failed. Check My Bookings before trying again."
+                "Payment verification failed. Check My Bookings before trying again."
               );
 
               setIsPaying(false);
@@ -1171,7 +1164,7 @@ const [appointmentDate, setAppointmentDate] = useState(
       checkout.on("payment.failed", (response) => {
         setError(
           response?.error?.description ||
-            "Payment failed. Please try again."
+          "Payment failed. Please try again."
         );
 
         setIsPaying(false);
@@ -1195,6 +1188,7 @@ const [appointmentDate, setAppointmentDate] = useState(
     return (
       <main className="min-h-screen bg-gray-50">
         <Header showBack={false} />
+
         <div className="flex min-h-[65vh] items-center justify-center text-sm text-gray-500">
           Redirecting to login...
         </div>
@@ -1283,6 +1277,7 @@ const [appointmentDate, setAppointmentDate] = useState(
           </div>
 
           <div className="space-y-6 p-5 sm:p-7">
+
             {/* Doctor and clinic details */}
             <div className="rounded-2xl bg-indigo-50 p-4 sm:p-5">
               <div className="flex items-start gap-3">
@@ -1414,7 +1409,6 @@ const [appointmentDate, setAppointmentDate] = useState(
                     }}
                     className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
                   >
-                   
                     <option value="Male">Male</option>
                     <option value="Female">Female</option>
                     <option value="Other">Other</option>
@@ -1441,8 +1435,6 @@ const [appointmentDate, setAppointmentDate] = useState(
                   onChange={handleDateChange}
                   className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
                 >
-                 
-
                   {availableDates.map((date) => (
                     <option
                       key={date.value}
@@ -1466,6 +1458,7 @@ const [appointmentDate, setAppointmentDate] = useState(
                   className="mt-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600"
                 >
                   {bookingsError}
+
                   <button
                     type="button"
                     onClick={() =>
@@ -1489,7 +1482,7 @@ const [appointmentDate, setAppointmentDate] = useState(
                       </p>
 
                       {selectedDateInfo.isHoliday ? (
-                        <p className="mt-1 text-xs text-red-600 font-medium">
+                        <p className="mt-1 text-xs font-medium text-red-600">
                           Doctor is on holiday on this date.
                         </p>
                       ) : availableTimes.length > 0 ? (
@@ -1532,6 +1525,7 @@ const [appointmentDate, setAppointmentDate] = useState(
               {!appointmentDate ? (
                 <div className="mt-3 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-center">
                   <Clock className="mx-auto h-6 w-6 text-gray-400" />
+
                   <p className="mt-2 text-sm font-medium text-gray-500">
                     Select a date first
                   </p>
@@ -1539,9 +1533,11 @@ const [appointmentDate, setAppointmentDate] = useState(
               ) : selectedDoctorSchedule?.isHoliday ? (
                 <div className="mt-3 rounded-xl border border-red-100 bg-red-50 p-5 text-center">
                   <Clock className="mx-auto h-6 w-6 text-red-400" />
+
                   <p className="mt-2 text-sm font-semibold text-red-700">
                     Doctor is on Holiday
                   </p>
+
                   <p className="mt-1 text-xs text-red-600">
                     No appointments available on this date.
                   </p>
@@ -1550,6 +1546,7 @@ const [appointmentDate, setAppointmentDate] = useState(
                 !selectedDoctorSchedule?.slots?.length ? (
                 <div className="mt-3 rounded-xl border border-red-100 bg-red-50 p-5 text-center">
                   <Clock className="mx-auto h-6 w-6 text-red-400" />
+
                   <p className="mt-2 text-sm font-semibold text-red-700">
                     Doctor Not Available
                   </p>
@@ -1557,6 +1554,7 @@ const [appointmentDate, setAppointmentDate] = useState(
               ) : loadingBookings ? (
                 <div className="mt-3 rounded-xl border border-gray-200 bg-gray-50 p-5 text-center">
                   <LoaderCircle className="mx-auto h-6 w-6 animate-spin text-indigo-500" />
+
                   <p className="mt-2 text-sm text-gray-500">
                     Loading current patient counts...
                   </p>
@@ -1566,6 +1564,7 @@ const [appointmentDate, setAppointmentDate] = useState(
                   <p className="text-sm font-semibold text-red-700">
                     Availability could not be verified
                   </p>
+
                   <button
                     type="button"
                     onClick={() =>
@@ -1579,9 +1578,11 @@ const [appointmentDate, setAppointmentDate] = useState(
               ) : availableTimes.length === 0 ? (
                 <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-5 text-center">
                   <Clock className="mx-auto h-6 w-6 text-amber-500" />
+
                   <p className="text-sm font-semibold text-amber-700">
                     No appointment slots available
                   </p>
+
                   <p className="mt-1 text-xs text-amber-600">
                     All slots for the selected date have already closed.
                   </p>
@@ -1589,7 +1590,8 @@ const [appointmentDate, setAppointmentDate] = useState(
               ) : (
                 <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {availableTimes.map((slot) => {
-                    const selected = appointmentTime === slot.open;
+                    const selected =
+                      appointmentTime === slot.open;
 
                     const disabled =
                       !slot.configured || slot.isFull;
@@ -1614,6 +1616,7 @@ const [appointmentDate, setAppointmentDate] = useState(
                       >
                         <div className="flex items-center gap-2">
                           <Clock className="h-4 w-4 shrink-0" />
+
                           <span className="text-sm font-semibold">
                             {slot.label}
                           </span>
@@ -1729,6 +1732,7 @@ const [appointmentDate, setAppointmentDate] = useState(
               </div>
             )}
 
+            {/* Error */}
             {error && (
               <div
                 role="alert"
@@ -1775,6 +1779,7 @@ const [appointmentDate, setAppointmentDate] = useState(
               ) : isSlotUnavailable ? (
                 <>
                   <Clock className="h-5 w-5" />
+
                   {!appointmentDate || !appointmentTime
                     ? "Select Appointment Slot"
                     : "Slot Full / Unavailable"}

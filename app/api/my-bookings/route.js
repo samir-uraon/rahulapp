@@ -1,4 +1,4 @@
- 
+
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import clientPromise from "@/lib/mongodb";
@@ -265,8 +265,6 @@ function getBookingSlot(booking) {
   };
 }
 
-
-
 function getBookingTime(booking) {
   const slot = getBookingSlot(booking);
 
@@ -448,6 +446,7 @@ function getBookingId(booking) {
       ""
   );
 }
+
 function getBookingIdentifiers(booking) {
   return [
     booking?._id,
@@ -459,6 +458,70 @@ function getBookingIdentifiers(booking) {
     .map(String);
 }
 
+// Extract cancellation and refund information from a booking.
+// Supports older records and newer explicit cancelledBy fields.
+function getCancellationInfo(booking) {
+  const rawCancelledBy = String(
+    booking.cancelledBy ||
+      booking.cancellationBy ||
+      booking.cancellationReason ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  let cancelledBy = null;
+
+  if (
+    rawCancelledBy.includes("doctor") ||
+    rawCancelledBy.includes("staff")
+  ) {
+    cancelledBy = rawCancelledBy.includes("staff")
+      ? "staff"
+      : "doctor";
+  } else if (
+    rawCancelledBy.includes("patient") ||
+    rawCancelledBy.includes("user")
+  ) {
+    cancelledBy = "patient";
+  }
+
+  const status = normalizeStatus(booking.status);
+
+  return {
+    cancelledBy:
+      status === "cancelled" ? cancelledBy : null,
+
+    cancellationReason:
+      status === "cancelled"
+        ? booking.cancellationReason || null
+        : null,
+
+    cancelledAt:
+      status === "cancelled"
+        ? booking.cancelledAt || null
+        : null,
+
+    refundStatus:
+      booking.refundStatus ?? null,
+
+    refundId:
+      booking.refundId ?? null,
+
+    refundAmount:
+      booking.refundAmount ?? null,
+
+    refundInitiatedAt:
+      booking.refundInitiatedAt ?? null,
+
+    refundExpectedDays:
+      booking.refundExpectedDays ?? null,
+  };
+}
+
+// Merge dedicated booking documents with embedded user bookings.
+// Prefer populated cancellation/refund values instead of allowing
+// empty or outdated values to overwrite them.
 function mergeUserBookingData(bookingDocuments, embeddedBookings) {
   return bookingDocuments.map((booking) => {
     const bookingIds = new Set(getBookingIdentifiers(booking));
@@ -469,6 +532,13 @@ function mergeUserBookingData(bookingDocuments, embeddedBookings) {
 
     if (!embeddedBooking) return booking;
 
+    const prefer = (field) =>
+      embeddedBooking[field] !== undefined &&
+      embeddedBooking[field] !== null &&
+      embeddedBooking[field] !== ""
+        ? embeddedBooking[field]
+        : booking[field] ?? null;
+
     return {
       ...booking,
       ...embeddedBooking,
@@ -476,32 +546,21 @@ function mergeUserBookingData(bookingDocuments, embeddedBookings) {
       // Keep the dedicated booking document's MongoDB ID.
       _id: booking._id,
 
-      // Prefer the latest cancellation/refund information
-      // saved in the users collection.
-      status: embeddedBooking.status || booking.status,
+      status: prefer("status"),
 
-      refundStatus:
-        embeddedBooking.refundStatus ?? booking.refundStatus,
+      cancelledBy: prefer("cancelledBy"),
+      cancellationBy: prefer("cancellationBy"),
+      cancellationReason: prefer("cancellationReason"),
+      cancelledAt: prefer("cancelledAt"),
 
-      refundId:
-        embeddedBooking.refundId ?? booking.refundId,
+      refundStatus: prefer("refundStatus"),
+      refundId: prefer("refundId"),
+      refundAmount: prefer("refundAmount"),
+      refundInitiatedAt: prefer("refundInitiatedAt"),
+      refundExpectedDays: prefer("refundExpectedDays"),
 
-      refundAmount:
-        embeddedBooking.refundAmount ?? booking.refundAmount,
-
-      refundInitiatedAt:
-        embeddedBooking.refundInitiatedAt ??
-        booking.refundInitiatedAt,
-
-      refundExpectedDays:
-        embeddedBooking.refundExpectedDays ??
-        booking.refundExpectedDays,
-
-      paymentStatus:
-        embeddedBooking.paymentStatus ?? booking.paymentStatus,
-
-      updatedAt:
-        embeddedBooking.updatedAt || booking.updatedAt,
+      paymentStatus: prefer("paymentStatus"),
+      updatedAt: prefer("updatedAt"),
     };
   });
 }
@@ -590,14 +649,63 @@ function deduplicateBookings(bookings) {
       toDate(booking.updatedAt || booking.createdAt)?.getTime() ||
       0;
 
+    // Preserve the newest booking data, including cancellation/refund
+    // information when both versions contain it.
     if (incomingUpdated > existingUpdated) {
-      unique.set(key, booking);
+      unique.set(key, {
+        ...existing,
+        ...booking,
+        cancelledBy:
+          booking.cancelledBy ?? existing.cancelledBy,
+        cancellationBy:
+          booking.cancellationBy ?? existing.cancellationBy,
+        cancellationReason:
+          booking.cancellationReason ?? existing.cancellationReason,
+        cancelledAt:
+          booking.cancelledAt ?? existing.cancelledAt,
+        refundStatus:
+          booking.refundStatus ?? existing.refundStatus,
+        refundId:
+          booking.refundId ?? existing.refundId,
+        refundAmount:
+          booking.refundAmount ?? existing.refundAmount,
+        refundInitiatedAt:
+          booking.refundInitiatedAt ?? existing.refundInitiatedAt,
+        refundExpectedDays:
+          booking.refundExpectedDays ?? existing.refundExpectedDays,
+      });
+    } else {
+      const current = unique.get(key);
+
+      // Do not lose cancellation/refund information from the
+      // older copy if the newer copy has empty fields.
+      unique.set(key, {
+        ...booking,
+        ...current,
+        cancelledBy:
+          current.cancelledBy ?? booking.cancelledBy,
+        cancellationBy:
+          current.cancellationBy ?? booking.cancellationBy,
+        cancellationReason:
+          current.cancellationReason ?? booking.cancellationReason,
+        cancelledAt:
+          current.cancelledAt ?? booking.cancelledAt,
+        refundStatus:
+          current.refundStatus ?? booking.refundStatus,
+        refundId:
+          current.refundId ?? booking.refundId,
+        refundAmount:
+          current.refundAmount ?? booking.refundAmount,
+        refundInitiatedAt:
+          current.refundInitiatedAt ?? booking.refundInitiatedAt,
+        refundExpectedDays:
+          current.refundExpectedDays ?? booking.refundExpectedDays,
+      });
     }
   }
 
   return [...unique.values()];
 }
-
 
 function getScheduledBaseMinutes(booking, doctor) {
   const dateKey = getIndiaDateKey(getBookingDate(booking));
@@ -672,8 +780,6 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
       currentMinutes ??
       0;
 
-    // If a patient is currently being served, estimate their
-    // remaining queue time from the current time.
     if (
       isServing(item.status) &&
       dateKey === todayKey &&
@@ -685,8 +791,6 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
       );
     }
 
-    // Every patient starts after the previous patient's
-    // estimated finish, unless their own scheduled start is later.
     if (previousEndMinutes !== null) {
       startMinutes = Math.max(
         startMinutes,
@@ -711,9 +815,7 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
   const bookingId = getBookingId(booking);
 
   let ownIndex = timeline.findIndex(
-    (item) =>
-      bookingId &&
-      item.id === bookingId
+    (item) => bookingId && item.id === bookingId
   );
 
   if (ownIndex < 0 && booking.bookingReference) {
@@ -799,7 +901,6 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
   };
 }
 
-
 function serializeBooking(booking, clinic, doctor, queueInfo) {
   const expectedTurnAt =
     queueInfo.expectedTurnAt ??
@@ -829,14 +930,10 @@ function serializeBooking(booking, clinic, doctor, queueInfo) {
     clinic?.location?.lng ??
     null;
 
+  const cancellationInfo = getCancellationInfo(booking);
+
   return {
     ...booking,
-    refundStatus: booking.refundStatus || null,
-refundId: booking.refundId || null,
-refundAmount: booking.refundAmount ?? null,
-refundInitiatedAt: booking.refundInitiatedAt || null,
-refundExpectedDays: booking.refundExpectedDays || null,
-paymentStatus: booking.paymentStatus || null,
 
     _id: booking._id ? String(booking._id) : null,
 
@@ -872,6 +969,20 @@ paymentStatus: booking.paymentStatus || null,
         : null,
 
     status: normalizeStatus(booking.status),
+
+    // Cancellation information
+    cancelledBy: cancellationInfo.cancelledBy,
+    cancellationReason: cancellationInfo.cancellationReason,
+    cancelledAt: cancellationInfo.cancelledAt,
+
+    // Refund information
+    refundStatus: cancellationInfo.refundStatus,
+    refundId: cancellationInfo.refundId,
+    refundAmount: cancellationInfo.refundAmount,
+    refundInitiatedAt: cancellationInfo.refundInitiatedAt,
+    refundExpectedDays: cancellationInfo.refundExpectedDays,
+
+    paymentStatus: booking.paymentStatus || null,
 
     peopleAhead: queueInfo.peopleAhead,
     estimatedWaitMinutes: queueInfo.estimatedWaitMinutes,
@@ -978,7 +1089,6 @@ export async function GET(request) {
       );
     }
 
-    // FIX: Pass the request using the req property.
     const token = await getToken({
       req: request,
       secret,
@@ -1081,15 +1191,15 @@ export async function GET(request) {
           }))
       : [];
 
-const mergedBookings = mergeUserBookingData(
-  bookingDocuments,
-  embeddedBookings
-);
+    const mergedBookings = mergeUserBookingData(
+      bookingDocuments,
+      embeddedBookings
+    );
 
-const userBookings = deduplicateBookings([
-  ...mergedBookings,
-  ...embeddedBookings,
-]);
+    const userBookings = deduplicateBookings([
+      ...mergedBookings,
+      ...embeddedBookings,
+    ]);
 
     if (!userBookings.length) {
       return NextResponse.json({

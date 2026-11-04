@@ -27,7 +27,7 @@ export async function GET(req) {
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB || "rahul");
 
-    // Atomically consume the code. It cannot be reused.
+    // Atomically consume code so it cannot be reused
     const result = await db
       .collection("mobile_auth_codes")
       .findOneAndDelete({
@@ -35,7 +35,6 @@ export async function GET(req) {
         expiresAt: { $gt: new Date() },
       });
 
-    // Support both MongoDB driver v4/v5 (result.value) and v6+ (result directly)
     const record = result && "value" in result ? result.value : result;
 
     if (!record || !record.user?.id) {
@@ -49,32 +48,41 @@ export async function GET(req) {
     const secret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
 
     if (!secret) {
-      console.error("Missing AUTH_SECRET or NEXTAUTH_SECRET in environment");
+      console.error("Missing AUTH_SECRET or NEXTAUTH_SECRET in Vercel environment variables.");
       return NextResponse.json(
         { error: "Server authentication secret is not configured." },
         { status: 500 }
       );
     }
 
-    // Create NextAuth-compatible JWT session token
-    const sessionToken = await encode({
+    const tokenPayload = {
+      sub: String(user.id),
+      id: String(user.id),
+      name: user.name || "",
+      email: user.email || "",
+      phone: user.phone || "",
+      role: user.role || "",
+      location: user.location || null,
+      address: user.address || null,
+      latitude: user.latitude ?? null,
+      longitude: user.longitude ?? null,
+    };
+
+    // CRITICAL: NextAuth requires the salt to match the cookie name!
+    const secureToken = await encode({
       secret,
       maxAge: SESSION_MAX_AGE,
-      token: {
-        sub: String(user.id),
-        id: String(user.id),
-        name: user.name || "",
-        email: user.email || "",
-        phone: user.phone || "",
-        role: user.role || "",
-        location: user.location || null,
-        address: user.address || null,
-        latitude: user.latitude ?? null,
-        longitude: user.longitude ?? null,
-      },
+      token: tokenPayload,
+      salt: "__Secure-next-auth.session-token",
     });
 
-    // Ensure redirect uses HTTPS in production so cookies aren't dropped
+    const standardToken = await encode({
+      secret,
+      maxAge: SESSION_MAX_AGE,
+      token: tokenPayload,
+      salt: "next-auth.session-token",
+    });
+
     const redirectUrl = new URL("/", req.url);
     if (redirectUrl.protocol === "http:" && !redirectUrl.hostname.includes("localhost")) {
       redirectUrl.protocol = "https:";
@@ -82,24 +90,22 @@ export async function GET(req) {
 
     const response = NextResponse.redirect(redirectUrl);
 
-    const isSecure = redirectUrl.protocol === "https:";
-
-    // Set NextAuth session cookie (both secure and fallback names for compatibility)
-    const cookieOptions = {
+    // Set cookies with matching names and salts
+    response.cookies.set("__Secure-next-auth.session-token", secureToken, {
       httpOnly: true,
-      secure: isSecure,
+      secure: true,
       sameSite: "lax",
       path: "/",
       maxAge: SESSION_MAX_AGE,
-    };
+    });
 
-    if (isSecure) {
-      response.cookies.set("__Secure-next-auth.session-token", sessionToken, cookieOptions);
-      response.cookies.set("__Secure-authjs.session-token", sessionToken, cookieOptions);
-    }
-
-    response.cookies.set("next-auth.session-token", sessionToken, cookieOptions);
-    response.cookies.set("authjs.session-token", sessionToken, cookieOptions);
+    response.cookies.set("next-auth.session-token", standardToken, {
+      httpOnly: true,
+      secure: redirectUrl.protocol === "https:",
+      sameSite: "lax",
+      path: "/",
+      maxAge: SESSION_MAX_AGE,
+    });
 
     response.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
     response.headers.set("Pragma", "no-cache");
