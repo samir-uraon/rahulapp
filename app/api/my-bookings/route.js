@@ -1,4 +1,3 @@
-
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import clientPromise from "@/lib/mongodb";
@@ -52,9 +51,7 @@ function escapeRegex(value) {
 
 function toDate(value) {
   if (!value) return null;
-
   const date = value instanceof Date ? value : new Date(value);
-
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
@@ -72,7 +69,6 @@ function parseTime(value) {
   }
 
   const text = String(value).trim();
-
   if (!text) return null;
 
   if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {
@@ -94,9 +90,7 @@ function parseTime(value) {
 
   if (meridiem) {
     if (hours < 1 || hours > 12) return null;
-
     hours %= 12;
-
     if (meridiem === "PM") hours += 12;
   } else if (hours > 23) {
     return null;
@@ -148,9 +142,7 @@ function getIndiaDateKey(value) {
   const month = getPart("month");
   const day = getPart("day");
 
-  return year && month && day
-    ? `${year}-${month}-${day}`
-    : null;
+  return year && month && day ? `${year}-${month}-${day}` : null;
 }
 
 function getIndiaMinutes(value = new Date()) {
@@ -189,10 +181,7 @@ function makeIndiaDate(dateKey, minutes) {
     return null;
   }
 
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(
-    String(dateKey)
-  );
-
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey));
   if (!match) return null;
 
   const year = Number(match[1]);
@@ -200,8 +189,7 @@ function makeIndiaDate(dateKey, minutes) {
   const day = Number(match[3]);
 
   return new Date(
-    Date.UTC(year, month - 1, day, 0, Number(minutes)) -
-      330 * 60 * 1000
+    Date.UTC(year, month - 1, day, 0, Number(minutes)) - 330 * 60 * 1000
   );
 }
 
@@ -280,7 +268,6 @@ function getBookingTime(booking) {
 
   for (const value of values) {
     const minutes = parseTime(value);
-
     if (minutes !== null) return minutes;
   }
 
@@ -293,7 +280,6 @@ function getCheckupStartTime(booking, doctor) {
 
   if (dateKey) {
     const [year, month, day] = dateKey.split("-").map(Number);
-
     const dayKey =
       DAY_NAMES[
         new Date(Date.UTC(year, month - 1, day)).getUTCDay()
@@ -312,7 +298,6 @@ function getCheckupStartTime(booking, doctor) {
       const open = parseTime(
         item.open || item.start || item.startTime
       );
-
       const close = parseTime(
         item.close || item.end || item.endTime
       );
@@ -343,7 +328,6 @@ function getCheckupStartTime(booking, doctor) {
 
   for (const value of values) {
     const minutes = parseTime(value);
-
     if (minutes !== null) return minutes;
   }
 
@@ -380,9 +364,7 @@ function getDuration(booking, doctor) {
     if (value === null || value === undefined || value === "") {
       continue;
     }
-
     const duration = Number(value);
-
     if (Number.isFinite(duration) && duration > 0) {
       return duration;
     }
@@ -458,8 +440,6 @@ function getBookingIdentifiers(booking) {
     .map(String);
 }
 
-// Extract cancellation and refund information from a booking.
-// Supports older records and newer explicit cancelledBy fields.
 function getCancellationInfo(booking) {
   const rawCancelledBy = String(
     booking.cancelledBy ||
@@ -489,80 +469,21 @@ function getCancellationInfo(booking) {
   const status = normalizeStatus(booking.status);
 
   return {
-    cancelledBy:
-      status === "cancelled" ? cancelledBy : null,
-
+    cancelledBy: status === "cancelled" ? cancelledBy : null,
     cancellationReason:
       status === "cancelled"
         ? booking.cancellationReason || null
         : null,
-
     cancelledAt:
       status === "cancelled"
         ? booking.cancelledAt || null
         : null,
-
-    refundStatus:
-      booking.refundStatus ?? null,
-
-    refundId:
-      booking.refundId ?? null,
-
-    refundAmount:
-      booking.refundAmount ?? null,
-
-    refundInitiatedAt:
-      booking.refundInitiatedAt ?? null,
-
-    refundExpectedDays:
-      booking.refundExpectedDays ?? null,
+    refundStatus: booking.refundStatus ?? booking.payment?.refundStatus ?? null,
+    refundId: booking.refundId ?? booking.payment?.refundId ?? null,
+    refundAmount: booking.refundAmount ?? booking.payment?.refundAmount ?? null,
+    refundInitiatedAt: booking.refundInitiatedAt ?? null,
+    refundExpectedDays: booking.refundExpectedDays ?? null,
   };
-}
-
-// Merge dedicated booking documents with embedded user bookings.
-// Prefer populated cancellation/refund values instead of allowing
-// empty or outdated values to overwrite them.
-function mergeUserBookingData(bookingDocuments, embeddedBookings) {
-  return bookingDocuments.map((booking) => {
-    const bookingIds = new Set(getBookingIdentifiers(booking));
-
-    const embeddedBooking = embeddedBookings.find((item) =>
-      getBookingIdentifiers(item).some((id) => bookingIds.has(id))
-    );
-
-    if (!embeddedBooking) return booking;
-
-    const prefer = (field) =>
-      embeddedBooking[field] !== undefined &&
-      embeddedBooking[field] !== null &&
-      embeddedBooking[field] !== ""
-        ? embeddedBooking[field]
-        : booking[field] ?? null;
-
-    return {
-      ...booking,
-      ...embeddedBooking,
-
-      // Keep the dedicated booking document's MongoDB ID.
-      _id: booking._id,
-
-      status: prefer("status"),
-
-      cancelledBy: prefer("cancelledBy"),
-      cancellationBy: prefer("cancellationBy"),
-      cancellationReason: prefer("cancellationReason"),
-      cancelledAt: prefer("cancelledAt"),
-
-      refundStatus: prefer("refundStatus"),
-      refundId: prefer("refundId"),
-      refundAmount: prefer("refundAmount"),
-      refundInitiatedAt: prefer("refundInitiatedAt"),
-      refundExpectedDays: prefer("refundExpectedDays"),
-
-      paymentStatus: prefer("paymentStatus"),
-      updatedAt: prefer("updatedAt"),
-    };
-  });
 }
 
 function getClinicId(booking) {
@@ -592,16 +513,10 @@ function compareBookings(a, b) {
   }
 
   const priorityDifference = getPriority(a) - getPriority(b);
-
-  if (priorityDifference !== 0) {
-    return priorityDifference;
-  }
+  if (priorityDifference !== 0) return priorityDifference;
 
   const sequenceDifference = getSequence(a) - getSequence(b);
-
-  if (sequenceDifference !== 0) {
-    return sequenceDifference;
-  }
+  if (sequenceDifference !== 0) return sequenceDifference;
 
   return getCreatedTime(a) - getCreatedTime(b);
 }
@@ -642,33 +557,23 @@ function deduplicateBookings(bookings) {
     const existing = unique.get(key);
 
     const existingUpdated =
-      toDate(existing.updatedAt || existing.createdAt)?.getTime() ||
-      0;
+      toDate(existing.updatedAt || existing.createdAt)?.getTime() || 0;
 
     const incomingUpdated =
-      toDate(booking.updatedAt || booking.createdAt)?.getTime() ||
-      0;
+      toDate(booking.updatedAt || booking.createdAt)?.getTime() || 0;
 
-    // Preserve the newest booking data, including cancellation/refund
-    // information when both versions contain it.
     if (incomingUpdated > existingUpdated) {
       unique.set(key, {
         ...existing,
         ...booking,
-        cancelledBy:
-          booking.cancelledBy ?? existing.cancelledBy,
-        cancellationBy:
-          booking.cancellationBy ?? existing.cancellationBy,
+        cancelledBy: booking.cancelledBy ?? existing.cancelledBy,
+        cancellationBy: booking.cancellationBy ?? existing.cancellationBy,
         cancellationReason:
           booking.cancellationReason ?? existing.cancellationReason,
-        cancelledAt:
-          booking.cancelledAt ?? existing.cancelledAt,
-        refundStatus:
-          booking.refundStatus ?? existing.refundStatus,
-        refundId:
-          booking.refundId ?? existing.refundId,
-        refundAmount:
-          booking.refundAmount ?? existing.refundAmount,
+        cancelledAt: booking.cancelledAt ?? existing.cancelledAt,
+        refundStatus: booking.refundStatus ?? existing.refundStatus,
+        refundId: booking.refundId ?? existing.refundId,
+        refundAmount: booking.refundAmount ?? existing.refundAmount,
         refundInitiatedAt:
           booking.refundInitiatedAt ?? existing.refundInitiatedAt,
         refundExpectedDays:
@@ -677,25 +582,17 @@ function deduplicateBookings(bookings) {
     } else {
       const current = unique.get(key);
 
-      // Do not lose cancellation/refund information from the
-      // older copy if the newer copy has empty fields.
       unique.set(key, {
         ...booking,
         ...current,
-        cancelledBy:
-          current.cancelledBy ?? booking.cancelledBy,
-        cancellationBy:
-          current.cancellationBy ?? booking.cancellationBy,
+        cancelledBy: current.cancelledBy ?? booking.cancelledBy,
+        cancellationBy: current.cancellationBy ?? booking.cancellationBy,
         cancellationReason:
           current.cancellationReason ?? booking.cancellationReason,
-        cancelledAt:
-          current.cancelledAt ?? booking.cancelledAt,
-        refundStatus:
-          current.refundStatus ?? booking.refundStatus,
-        refundId:
-          current.refundId ?? booking.refundId,
-        refundAmount:
-          current.refundAmount ?? booking.refundAmount,
+        cancelledAt: current.cancelledAt ?? booking.cancelledAt,
+        refundStatus: current.refundStatus ?? booking.refundStatus,
+        refundId: current.refundId ?? booking.refundId,
+        refundAmount: current.refundAmount ?? booking.refundAmount,
         refundInitiatedAt:
           current.refundInitiatedAt ?? booking.refundInitiatedAt,
         refundExpectedDays:
@@ -718,9 +615,7 @@ function getScheduledBaseMinutes(booking, doctor) {
 
   if (slotOpen !== null) {
     baseMinutes =
-      baseMinutes === null
-        ? slotOpen
-        : Math.max(baseMinutes, slotOpen);
+      baseMinutes === null ? slotOpen : Math.max(baseMinutes, slotOpen);
   }
 
   if (checkupStart !== null) {
@@ -769,10 +664,7 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
   let previousEndMinutes = null;
 
   for (const item of activeBookings) {
-    const itemBaseMinutes = getScheduledBaseMinutes(
-      item,
-      doctor
-    );
+    const itemBaseMinutes = getScheduledBaseMinutes(item, doctor);
 
     let startMinutes =
       itemBaseMinutes ??
@@ -785,17 +677,11 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
       dateKey === todayKey &&
       currentMinutes !== null
     ) {
-      startMinutes = Math.max(
-        startMinutes,
-        currentMinutes
-      );
+      startMinutes = Math.max(startMinutes, currentMinutes);
     }
 
     if (previousEndMinutes !== null) {
-      startMinutes = Math.max(
-        startMinutes,
-        previousEndMinutes
-      );
+      startMinutes = Math.max(startMinutes, previousEndMinutes);
     }
 
     const itemDuration = getDuration(item, doctor);
@@ -827,11 +713,9 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
     );
   }
 
-  const ownTimeline =
-    ownIndex >= 0 ? timeline[ownIndex] : null;
+  const ownTimeline = ownIndex >= 0 ? timeline[ownIndex] : null;
 
-  const ownBaseMinutes =
-    getScheduledBaseMinutes(booking, doctor);
+  const ownBaseMinutes = getScheduledBaseMinutes(booking, doctor);
 
   let peopleAhead = 0;
   let expectedStartMinutes = ownBaseMinutes;
@@ -842,8 +726,7 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
       peopleAhead = ownIndex;
       expectedStartMinutes = ownTimeline.startMinutes;
 
-      const waitBase =
-        ownBaseMinutes ?? ownTimeline.startMinutes;
+      const waitBase = ownBaseMinutes ?? ownTimeline.startMinutes;
 
       estimatedWaitMinutes = Math.max(
         0,
@@ -865,12 +748,8 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
       }
 
       estimatedWaitMinutes =
-        expectedStartMinutes !== null &&
-        ownBaseMinutes !== null
-          ? Math.max(
-              0,
-              expectedStartMinutes - ownBaseMinutes
-            )
+        expectedStartMinutes !== null && ownBaseMinutes !== null
+          ? Math.max(0, expectedStartMinutes - ownBaseMinutes)
           : 0;
     }
   }
@@ -885,10 +764,7 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
     if (isServing(status) && dateKey === todayKey) {
       expectedTurnAt = now;
     } else {
-      expectedTurnAt = makeIndiaDate(
-        dateKey,
-        expectedStartMinutes
-      );
+      expectedTurnAt = makeIndiaDate(dateKey, expectedStartMinutes);
     }
   }
 
@@ -932,17 +808,23 @@ function serializeBooking(booking, clinic, doctor, queueInfo) {
 
   const cancellationInfo = getCancellationInfo(booking);
 
+  const originalPaymentAmount =
+    booking.originalPaymentAmount ??
+    booking.paymentAmount ??
+    booking.amount ??
+    booking.payment?.originalAmount ??
+    booking.payment?.amount ??
+    null;
+
   return {
     ...booking,
 
     _id: booking._id ? String(booking._id) : null,
 
-    clinicId:
-      getClinicId(booking) || String(clinic?._id || ""),
+    clinicId: getClinicId(booking) || String(clinic?._id || ""),
 
     doctorId:
-      getDoctorId(booking) ||
-      String(doctor?._id || doctor?.id || ""),
+      getDoctorId(booking) || String(doctor?._id || doctor?.id || ""),
 
     clinicName:
       booking.clinicName ||
@@ -970,19 +852,19 @@ function serializeBooking(booking, clinic, doctor, queueInfo) {
 
     status: normalizeStatus(booking.status),
 
-    // Cancellation information
+    paymentAmount: originalPaymentAmount,
+    originalPaymentAmount: originalPaymentAmount,
+    paymentStatus: booking.paymentStatus || null,
+
     cancelledBy: cancellationInfo.cancelledBy,
     cancellationReason: cancellationInfo.cancellationReason,
     cancelledAt: cancellationInfo.cancelledAt,
 
-    // Refund information
     refundStatus: cancellationInfo.refundStatus,
     refundId: cancellationInfo.refundId,
     refundAmount: cancellationInfo.refundAmount,
     refundInitiatedAt: cancellationInfo.refundInitiatedAt,
     refundExpectedDays: cancellationInfo.refundExpectedDays,
-
-    paymentStatus: booking.paymentStatus || null,
 
     peopleAhead: queueInfo.peopleAhead,
     estimatedWaitMinutes: queueInfo.estimatedWaitMinutes,
@@ -1008,18 +890,11 @@ function buildUserQuery(token) {
   const email = String(token.email || "").trim().toLowerCase();
 
   for (const id of new Set([tokenId, subject].filter(Boolean))) {
-    clauses.push(
-      { userId: id },
-      { user: id }
-    );
+    clauses.push({ userId: id }, { user: id });
 
     if (ObjectId.isValid(id) && id.length === 24) {
       const objectId = new ObjectId(id);
-
-      clauses.push(
-        { userId: objectId },
-        { user: objectId }
-      );
+      clauses.push({ userId: objectId }, { user: objectId });
     }
   }
 
@@ -1072,14 +947,9 @@ function addIdCandidates(values, id) {
 export async function GET(request) {
   try {
     const secret =
-      process.env.AUTH_SECRET ||
-      process.env.NEXTAUTH_SECRET;
+      process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
 
     if (!secret) {
-      console.error(
-        "GET /api/my-bookings: AUTH_SECRET or NEXTAUTH_SECRET is not configured."
-      );
-
       return NextResponse.json(
         {
           success: false,
@@ -1105,10 +975,6 @@ export async function GET(request) {
     }
 
     if (!process.env.MONGODB) {
-      console.error(
-        "GET /api/my-bookings: MONGODB environment variable is missing."
-      );
-
       return NextResponse.json(
         {
           success: false,
@@ -1122,7 +988,6 @@ export async function GET(request) {
     const db = client.db(process.env.MONGODB);
 
     const bookingsCollection = db.collection("bookings");
-    const usersCollection = db.collection("users");
     const clinicsCollection = db.collection("clinics");
 
     const userQuery = buildUserQuery(token);
@@ -1137,71 +1002,13 @@ export async function GET(request) {
       );
     }
 
-    const email = String(token.email || "").trim().toLowerCase();
-    const tokenId = String(token.id || token.sub || "").trim();
+    const bookingDocuments = await bookingsCollection
+      .find({
+        $or: userQuery,
+      })
+      .toArray();
 
-    const userLookupClauses = [];
-
-    if (
-      tokenId &&
-      ObjectId.isValid(tokenId) &&
-      tokenId.length === 24
-    ) {
-      userLookupClauses.push({
-        _id: new ObjectId(tokenId),
-      });
-    }
-
-    if (email) {
-      userLookupClauses.push({
-        email: {
-          $regex: `^${escapeRegex(email)}$`,
-          $options: "i",
-        },
-      });
-    }
-
-    const [bookingDocuments, userDocument] = await Promise.all([
-      bookingsCollection.find({ $or: userQuery }).toArray(),
-
-      userLookupClauses.length
-        ? usersCollection.findOne({ $or: userLookupClauses })
-        : Promise.resolve(null),
-    ]);
-
-    const embeddedBookings = Array.isArray(userDocument?.bookings)
-      ? userDocument.bookings
-          .filter(
-            (booking) =>
-              booking &&
-              typeof booking === "object" &&
-              !Array.isArray(booking)
-          )
-          .map((booking) => ({
-            ...booking,
-            userId:
-              booking.userId ||
-              userDocument._id?.toString() ||
-              tokenId,
-            email:
-              booking.email ||
-              booking.userEmail ||
-              userDocument.email ||
-              email,
-          }))
-      : [];
-
-    const mergedBookings = mergeUserBookingData(
-      bookingDocuments,
-      embeddedBookings
-    );
-
-    const userBookings = deduplicateBookings([
-      ...mergedBookings,
-      ...embeddedBookings,
-    ]);
-
-    if (!userBookings.length) {
+    if (!bookingDocuments.length) {
       return NextResponse.json({
         success: true,
         bookings: [],
@@ -1241,7 +1048,7 @@ export async function GET(request) {
 
     const clinicDoctorPairs = new Map();
 
-    for (const booking of userBookings) {
+    for (const booking of bookingDocuments) {
       const clinicId = getClinicId(booking);
       const doctorId = getDoctorId(booking);
 
@@ -1282,25 +1089,25 @@ export async function GET(request) {
 
     const otherQueueBookings = queueConditions.length
       ? await bookingsCollection
-          .find({ $or: queueConditions })
+          .find({
+            $or: queueConditions,
+          })
           .toArray()
       : [];
 
     const queuePool = deduplicateBookings([
       ...otherQueueBookings,
-      ...userBookings,
+      ...bookingDocuments,
     ]);
 
     const now = new Date();
 
-    const result = userBookings.map((booking) => {
+    const result = bookingDocuments.map((booking) => {
       const clinicId = getClinicId(booking);
       const doctorId = getDoctorId(booking);
 
       const clinic =
-        clinicById.get(clinicId) ||
-        booking.clinic ||
-        null;
+        clinicById.get(clinicId) || booking.clinic || null;
 
       const doctor =
         doctorByPair.get(`${clinicId}|${doctorId}`) ||
@@ -1315,12 +1122,7 @@ export async function GET(request) {
         now
       );
 
-      return serializeBooking(
-        booking,
-        clinic,
-        doctor,
-        queueInfo
-      );
+      return serializeBooking(booking, clinic, doctor, queueInfo);
     });
 
     result.sort((a, b) => {

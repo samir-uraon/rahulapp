@@ -4,8 +4,16 @@ import crypto from "crypto";
 import clientPromise from "@/lib/mongodb";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
+
+const ALLOWED_COOKIE_NAMES = new Set([
+  "__Secure-authjs.session-token",
+  "authjs.session-token",
+  "__Secure-next-auth.session-token",
+  "next-auth.session-token",
+]);
 
 export async function GET(req) {
   try {
@@ -19,15 +27,12 @@ export async function GET(req) {
       );
     }
 
-    const codeHash = crypto
-      .createHash("sha256")
-      .update(code)
-      .digest("hex");
+    const codeHash = crypto.createHash("sha256").update(code).digest("hex");
 
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB || "rahul");
 
-    // Atomically consume code so it cannot be reused
+    // Atomically consume the code so it cannot be reused
     const result = await db
       .collection("mobile_auth_codes")
       .findOneAndDelete({
@@ -44,16 +49,26 @@ export async function GET(req) {
       );
     }
 
-    const user = record.user;
+    const cookieName = record.cookieName;
+
+    if (!ALLOWED_COOKIE_NAMES.has(cookieName)) {
+      return NextResponse.json(
+        { error: "Invalid session cookie configuration." },
+        { status: 500 }
+      );
+    }
+
     const secret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
 
     if (!secret) {
-      console.error("Missing AUTH_SECRET or NEXTAUTH_SECRET in Vercel environment variables.");
+      console.error("Missing AUTH_SECRET or NEXTAUTH_SECRET.");
       return NextResponse.json(
         { error: "Server authentication secret is not configured." },
         { status: 500 }
       );
     }
+
+    const user = record.user;
 
     const tokenPayload = {
       sub: String(user.id),
@@ -68,40 +83,31 @@ export async function GET(req) {
       longitude: user.longitude ?? null,
     };
 
-    // CRITICAL: NextAuth requires the salt to match the cookie name!
-    const secureToken = await encode({
-      secret,
-      maxAge: SESSION_MAX_AGE,
-      token: tokenPayload,
-      salt: "__Secure-next-auth.session-token",
-    });
+    // Auth.js v5 (authjs.* cookies) uses the cookie name as salt.
+    // NextAuth v4 (next-auth.* cookies) uses an empty salt.
+    const salt = cookieName.includes("authjs") ? cookieName : "";
 
-    const standardToken = await encode({
+    const sessionToken = await encode({
       secret,
+      salt,
       maxAge: SESSION_MAX_AGE,
       token: tokenPayload,
-      salt: "next-auth.session-token",
     });
 
     const redirectUrl = new URL("/", req.url);
-    if (redirectUrl.protocol === "http:" && !redirectUrl.hostname.includes("localhost")) {
+    if (
+      redirectUrl.protocol === "http:" &&
+      !redirectUrl.hostname.includes("localhost")
+    ) {
       redirectUrl.protocol = "https:";
     }
 
     const response = NextResponse.redirect(redirectUrl);
 
-    // Set cookies with matching names and salts
-    response.cookies.set("__Secure-next-auth.session-token", secureToken, {
+    response.cookies.set(cookieName, sessionToken, {
       httpOnly: true,
-      secure: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: SESSION_MAX_AGE,
-    });
-
-    response.cookies.set("next-auth.session-token", standardToken, {
-      httpOnly: true,
-      secure: redirectUrl.protocol === "https:",
+      // "__Secure-" cookies must be secure
+      secure: cookieName.startsWith("__Secure-") || redirectUrl.protocol === "https:",
       sameSite: "lax",
       path: "/",
       maxAge: SESSION_MAX_AGE,

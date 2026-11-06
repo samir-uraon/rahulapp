@@ -1,10 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
+import { toast } from "react-hot-toast";
+
 import Header from "@/components/Header";
 import GoUpButton from "@/components/GoUpButton";
+
 import {
   CalendarDays,
   Clock,
@@ -23,6 +32,10 @@ import {
 
 const INDIA_TIME_ZONE = "Asia/Kolkata";
 
+const TWO_HOURS = 2 * 60 * 60 * 1000;
+const BOOKINGS_CACHE_TTL = 30_000;
+const REFRESH_INTERVAL = 20_000;
+
 const HISTORY_STATUSES = [
   "completed",
   "cancelled",
@@ -31,6 +44,13 @@ const HISTORY_STATUSES = [
   "failed",
   "rejected",
 ];
+
+const bookingsCache = new Map();
+const bookingsRequests = new Map();
+
+/* ----------------------------------
+   DATE HELPERS
+---------------------------------- */
 
 function parseDate(value) {
   if (!value) return null;
@@ -50,15 +70,18 @@ function parseDate(value) {
   }
 
   const text = String(value).trim();
+
   if (!text) return null;
 
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
 
   if (dateOnly) {
     const [, y, m, d] = dateOnly;
+
     const year = Number(y);
     const month = Number(m);
     const day = Number(d);
+
     const date = new Date(year, month - 1, day);
 
     if (
@@ -73,6 +96,7 @@ function parseDate(value) {
   }
 
   const date = new Date(text);
+
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
@@ -92,13 +116,16 @@ function getIndiaDateKey(value) {
 
   if (typeof value === "string") {
     const text = value.trim();
+
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
 
     if (match) {
       const [, y, m, d] = match;
+
       const year = Number(y);
       const month = Number(m);
       const day = Number(d);
+
       const check = new Date(year, month - 1, day);
 
       if (
@@ -114,6 +141,7 @@ function getIndiaDateKey(value) {
   }
 
   const date = parseDate(value);
+
   if (!date) return null;
 
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -137,110 +165,13 @@ function getTodayDateKey() {
   return getIndiaDateKey(new Date());
 }
 
-function parseTimeForQueue(value) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value >= 0 && value < 1440 ? Math.floor(value) : null;
-  }
-
-  const text = String(value).trim();
-  const match =
-    /^(\d{1,2})(?::(\d{1,2}))?(?::\d{2})?\s*(AM|PM)?$/i.exec(text);
-
-  if (!match) return null;
-
-  let hours = Number(match[1]);
-  const minutes = Number(match[2] || 0);
-  const period = match[3]?.toUpperCase();
-
-  if (minutes > 59) return null;
-
-  if (period) {
-    if (hours < 1 || hours > 12) return null;
-
-    hours %= 12;
-    if (period === "PM") hours += 12;
-  } else if (hours > 23) {
-    return null;
-  }
-
-  return hours * 60 + minutes;
-}
-
-function getIndiaMinutes(value = new Date()) {
-  const date = value instanceof Date ? value : parseDate(value);
-  if (!date) return null;
-
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: INDIA_TIME_ZONE,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-
-  const hours = Number(
-    parts.find((part) => part.type === "hour")?.value
-  );
-  const minutes = Number(
-    parts.find((part) => part.type === "minute")?.value
-  );
-
-  return hours * 60 + minutes;
-}
-
-function formatTime(value) {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-
-  if (value instanceof Date || typeof value === "object") {
-    const date = parseDate(value);
-    if (!date) return "";
-
-    return date.toLocaleTimeString("en-IN", {
-      timeZone: INDIA_TIME_ZONE,
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-  }
-
-  const text = String(value).trim();
-  if (!text) return "";
-
-  const minutes = parseTimeForQueue(text);
-
-  if (minutes !== null) {
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    const period = hours >= 12 ? "PM" : "AM";
-
-    return `${hours % 12 || 12}:${String(mins).padStart(2, "0")} ${period}`;
-  }
-
-  const date = parseDate(text);
-
-  if (date && (text.includes("T") || text.endsWith("Z"))) {
-    return date.toLocaleTimeString("en-IN", {
-      timeZone: INDIA_TIME_ZONE,
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-  }
-
-  return text;
-}
-
 function formatDate(value) {
   if (
     typeof value === "string" &&
     /^\d{4}-\d{2}-\d{2}$/.test(value.trim())
   ) {
     const [year, month, day] = value.split("-").map(Number);
+
     const date = new Date(year, month - 1, day);
 
     if (
@@ -259,6 +190,7 @@ function formatDate(value) {
   }
 
   const date = parseDate(value);
+
   if (!date) return "Date not available";
 
   return date.toLocaleDateString("en-IN", {
@@ -268,6 +200,262 @@ function formatDate(value) {
     year: "numeric",
   });
 }
+
+/* ----------------------------------
+   BOOKING TIMESTAMP HELPERS
+---------------------------------- */
+
+function getBookedAtValue(booking) {
+  return (
+    booking.createdAt ||
+    booking.bookedAt ||
+    booking.bookingCreatedAt ||
+    booking.created_at ||
+    booking.payment?.createdAt ||
+    booking.payment?.paidAt ||
+    null
+  );
+}
+
+function formatDateTime(value) {
+  const date = parseDate(value);
+  if (!date) return "Booking time unavailable";
+
+  return date.toLocaleString("en-IN", {
+    timeZone: INDIA_TIME_ZONE,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function getCancellationWindowInfo(booking) {
+  const bookedAt = parseDate(getBookedAtValue(booking));
+  const cancelledAt = parseDate(
+    booking.cancelledAt ||
+      booking.canceledAt ||
+      booking.cancellation?.cancelledAt ||
+      booking.cancellation?.canceledAt
+  );
+
+  const actor = getCancellationActor(booking);
+
+  if (actor === "doctor") {
+    return {
+      available: true,
+      withinTwoHours: true,
+      message: "Cancelled by Doctor. Eligible for full refund.",
+    };
+  }
+
+  if (!bookedAt || !cancelledAt) {
+    return {
+      available: false,
+      withinTwoHours: null,
+      message: "Cancellation timing unavailable",
+    };
+  }
+
+  const elapsedMs = cancelledAt.getTime() - bookedAt.getTime();
+
+  if (elapsedMs < 0) {
+    return {
+      available: false,
+      withinTwoHours: null,
+      message: "Cancellation timing could not be verified",
+    };
+  }
+
+  const withinTwoHours = elapsedMs <= TWO_HOURS;
+  const totalMinutes = Math.floor(elapsedMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const elapsedLabel =
+    hours > 0 ? `${hours} hr ${minutes} min` : `${minutes} min`;
+
+  return {
+    available: true,
+    withinTwoHours,
+    elapsedLabel,
+    message: withinTwoHours
+      ? `Cancelled within 2 hours of booking (${elapsedLabel} after booking).`
+      : `Cancelled after 2 hours (${elapsedLabel} after booking).`,
+  };
+}
+
+
+function getCancellationEligibilityInfo(booking, now = Date.now()) {
+  const bookedAt = parseDate(getBookedAtValue(booking));
+
+  if (!bookedAt) {
+    return {
+      available: false,
+      refundable: null,
+      remainingMinutes: 0,
+      remainingSeconds: 0,
+      message: "Refund eligibility will be verified by the server.",
+    };
+  }
+
+  const bookedAtMs = bookedAt.getTime();
+
+  if (!Number.isFinite(bookedAtMs) || !Number.isFinite(now)) {
+    return {
+      available: false,
+      refundable: null,
+      remainingMinutes: 0,
+      remainingSeconds: 0,
+      message: "Booking time could not be verified.",
+    };
+  }
+
+  const elapsedMs = Math.max(0, now - bookedAtMs);
+  const refundable = elapsedMs <= TWO_HOURS;
+
+  if (refundable) {
+    const remainingMs = Math.max(0, TWO_HOURS - elapsedMs);
+
+    const remainingMinutes = Math.floor(remainingMs / 60_000);
+    const remainingSeconds = Math.floor(
+      (remainingMs % 60_000) / 1_000
+    );
+
+    return {
+      available: true,
+      refundable: true,
+      remainingMinutes,
+      remainingSeconds,
+      message: `Eligible for a refund if cancelled now. ${remainingMinutes} min ${remainingSeconds} sec remain in the 2-hour refund window.`,
+    };
+  }
+
+  return {
+    available: true,
+    refundable: false,
+    remainingMinutes: 0,
+    remainingSeconds: 0,
+    message:
+      "The 2-hour refund window has expired. You can still cancel, but no refund will be provided.",
+  };
+}
+
+/* ----------------------------------
+   TIME HELPERS
+---------------------------------- */
+
+function parseTimeForQueue(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value >= 0 && value < 1440 ? Math.floor(value) : null;
+  }
+
+  const text = String(value).trim();
+
+  const match =
+    /^(\d{1,2})(?::(\d{1,2}))?(?::\d{2})?\s*(AM|PM)?$/i.exec(text);
+
+  if (!match) return null;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] || 0);
+  const period = match[3]?.toUpperCase();
+
+  if (minutes > 59) return null;
+
+  if (period) {
+    if (hours < 1 || hours > 12) return null;
+
+    hours %= 12;
+
+    if (period === "PM") hours += 12;
+  } else if (hours > 23) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function getIndiaMinutes(value = new Date()) {
+  const date = value instanceof Date ? value : parseDate(value);
+
+  if (!date) return null;
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: INDIA_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const hours = Number(
+    parts.find((part) => part.type === "hour")?.value
+  );
+
+  const minutes = Number(
+    parts.find((part) => part.type === "minute")?.value
+  );
+
+  return hours * 60 + minutes;
+}
+
+function formatTime(value) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+
+  if (value instanceof Date || typeof value === "object") {
+    const date = parseDate(value);
+
+    if (!date) return "";
+
+    return date.toLocaleTimeString("en-IN", {
+      timeZone: INDIA_TIME_ZONE,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  }
+
+  const text = String(value).trim();
+
+  if (!text) return "";
+
+  const minutes = parseTimeForQueue(text);
+
+  if (minutes !== null) {
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    const period = hours >= 12 ? "PM" : "AM";
+
+    return `${hours % 12 || 12}:${String(mins).padStart(
+      2,
+      "0"
+    )} ${period}`;
+  }
+
+  const date = parseDate(text);
+
+  if (date && (text.includes("T") || text.endsWith("Z"))) {
+    return date.toLocaleTimeString("en-IN", {
+      timeZone: INDIA_TIME_ZONE,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  }
+
+  return text;
+}
+
+/* ----------------------------------
+   BOOKING HELPERS
+---------------------------------- */
 
 function getSlot(booking) {
   return (
@@ -323,13 +511,15 @@ function getCheckupStartValue(booking) {
 }
 
 function getPeopleAhead(booking) {
-  const value = booking.peopleAhead ?? booking.queue?.peopleAhead;
+  const value =
+    booking.peopleAhead ?? booking.queue?.peopleAhead;
 
   if (value === null || value === undefined || value === "") {
     return null;
   }
 
   const number = Number(value);
+
   return Number.isFinite(number) ? Math.max(0, number) : null;
 }
 
@@ -345,8 +535,13 @@ function getDuration(booking) {
   }
 
   const number = Number(value);
+
   return Number.isFinite(number) && number > 0 ? number : null;
 }
+
+/* ----------------------------------
+   STATUS HELPERS
+---------------------------------- */
 
 function normalizeStatus(status) {
   const value = String(status || "waiting")
@@ -371,7 +566,7 @@ function normalizeStatus(status) {
   return aliases[value] || value;
 }
 
-function canCancelBooking(booking, now = Date.now()) {
+function canCancelBooking(booking) {
   const status = normalizeStatus(booking.status);
 
   const blockedStatuses = [
@@ -383,18 +578,11 @@ function canCancelBooking(booking, now = Date.now()) {
     "rejected",
     "serving",
     "in-progress",
+    "your-turn",
+    "cancellation-processing",
   ];
 
-  if (blockedStatuses.includes(status)) return false;
-
-  const createdAt = parseDate(booking.createdAt);
-
-  if (!createdAt) return false;
-
-  const TWO_HOURS = 2 * 60 * 60 * 1000;
-  const elapsed = now - createdAt.getTime();
-
-  return elapsed >= 0 && elapsed <= TWO_HOURS;
+  return !blockedStatuses.includes(status);
 }
 
 function shouldMarkCompleted(booking) {
@@ -405,6 +593,54 @@ function getDisplayStatus(booking) {
   return normalizeStatus(booking.status);
 }
 
+function getCancellationActor(booking) {
+  const actor = normalizeStatus(booking?.cancelledBy || booking?.cancellationBy || "");
+  const reason = String(booking?.cancellationReason || "").toLowerCase();
+
+  if (
+    actor === "doctor" ||
+    actor === "staff" ||
+    reason.includes("cancelled by doctor") ||
+    reason.includes("canceled by doctor")
+  ) {
+    return "doctor";
+  }
+
+  if (
+    ["patient", "user", "owner"].includes(actor) ||
+    reason.includes("cancelled by patient") ||
+    reason.includes("canceled by patient") ||
+    reason.includes("cancelled by user")
+  ) {
+    return "patient";
+  }
+
+  return "";
+}
+
+function getCancellationLabel(booking) {
+  const actor = getCancellationActor(booking);
+
+  if (actor === "doctor") return "Cancelled by Doctor";
+  if (actor === "patient") return "Cancelled by You";
+
+  return "Cancelled";
+}
+
+function getCancellationDescription(booking) {
+  const actor = getCancellationActor(booking);
+
+  if (actor === "doctor") {
+    return "The doctor cancelled this appointment.";
+  }
+
+  if (actor === "patient") {
+    return "You cancelled this appointment.";
+  }
+
+  return booking?.cancellationReason || "This appointment was cancelled.";
+}
+
 function isHistoryStatus(status) {
   return HISTORY_STATUSES.includes(normalizeStatus(status));
 }
@@ -412,6 +648,10 @@ function isHistoryStatus(status) {
 function isActiveStatus(status) {
   return !isHistoryStatus(status);
 }
+
+/* ----------------------------------
+   SESSION HELPERS
+---------------------------------- */
 
 function getActualArrivalTime(booking) {
   return (
@@ -427,10 +667,14 @@ function getActualArrivalTime(booking) {
 function getSessionStartDisplay(booking, now = Date.now()) {
   const status = normalizeStatus(booking.status);
   const slotDate = getIndiaDateKey(getDateValue(booking));
+
   const isStarted = ["serving", "in-progress"].includes(status);
 
   if (!slotDate) {
-    return { label: "Session time unavailable", started: false };
+    return {
+      label: "Session time unavailable",
+      started: false,
+    };
   }
 
   if (isStarted) {
@@ -448,7 +692,10 @@ function getSessionStartDisplay(booking, now = Date.now()) {
   const scheduledMinutes = parseTimeForQueue(scheduledTime);
 
   if (scheduledMinutes === null) {
-    return { label: "Session time unavailable", started: false };
+    return {
+      label: "Session time unavailable",
+      started: false,
+    };
   }
 
   const today = getIndiaDateKey(new Date(now));
@@ -461,7 +708,10 @@ function getSessionStartDisplay(booking, now = Date.now()) {
   }
 
   if (slotDate < today) {
-    return { label: "Not started yet", started: false };
+    return {
+      label: "Not started yet",
+      started: false,
+    };
   }
 
   const currentMinutes = getIndiaMinutes(new Date(now));
@@ -473,8 +723,15 @@ function getSessionStartDisplay(booking, now = Date.now()) {
     };
   }
 
-  return { label: "Not started yet", started: false };
+  return {
+    label: "Not started yet",
+    started: false,
+  };
 }
+
+/* ----------------------------------
+   SORTING
+---------------------------------- */
 
 function getBookingSortTime(booking) {
   return (
@@ -486,15 +743,22 @@ function getBookingSortTime(booking) {
 
 function getBookingSortDate(booking) {
   const key = getIndiaDateKey(getDateValue(booking));
-  return key ? Number(key.replaceAll("-", "")) : Number.MAX_SAFE_INTEGER;
+
+  return key
+    ? Number(key.replaceAll("-", ""))
+    : Number.MAX_SAFE_INTEGER;
 }
 
 function sortBookings(bookings) {
   return [...bookings].sort((a, b) => {
-    const dateDifference = getBookingSortDate(a) - getBookingSortDate(b);
+    const dateDifference =
+      getBookingSortDate(a) - getBookingSortDate(b);
+
     if (dateDifference !== 0) return dateDifference;
 
-    const timeDifference = getBookingSortTime(a) - getBookingSortTime(b);
+    const timeDifference =
+      getBookingSortTime(a) - getBookingSortTime(b);
+
     if (timeDifference !== 0) return timeDifference;
 
     const aCreated = parseDate(a.createdAt)?.getTime() || 0;
@@ -534,83 +798,22 @@ function getSlotTimes(booking) {
   };
 }
 
-const BOOKINGS_CACHE_TTL = 30_000;
-
-const bookingsCache = new Map();
-const bookingsRequests = new Map();
-
-function getBookingsCacheKey(session) {
-  const userId = session?.user?.id;
-  const email = session?.user?.email?.trim().toLowerCase();
-
-  const identity = userId || email;
-
-  return identity ? `my-bookings:${identity}` : null;
-}
-
-function setCachedBookings(key, bookings) {
-  if (!key) return;
-
-  bookingsCache.set(key, {
-    bookings,
-    expiresAt: Date.now() + BOOKINGS_CACHE_TTL,
-  });
-}
-
-function StatusBadge({ status, peopleAhead }) {
-  const normalized = normalizeStatus(status);
-
-  const styles = {
-    waiting: "bg-amber-100 text-amber-800",
-    confirmed: "bg-green-100 text-green-800",
-    completed: "bg-blue-100 text-blue-800",
-    cancelled: "bg-red-100 text-red-800",
-    "in-progress": "bg-purple-100 text-purple-800",
-    serving: "bg-purple-100 text-purple-800",
-    "your-turn": "bg-indigo-100 text-indigo-800",
-    skipped: "bg-gray-100 text-gray-700",
-    refunded: "bg-gray-100 text-gray-700",
-    failed: "bg-red-100 text-red-800",
-    rejected: "bg-red-100 text-red-800",
-  };
-
-  const labels = {
-    waiting:
-      peopleAhead !== null && peopleAhead !== undefined
-        ? Number(peopleAhead) === 0
-          ? "Your turn"
-          : `${peopleAhead} ${
-              Number(peopleAhead) === 1 ? "person" : "people"
-            } ahead`
-        : "Waiting",
-    confirmed: "Confirmed",
-    completed: "Completed",
-    cancelled: "Cancelled",
-    "in-progress": "In Progress",
-    serving: "In Progress",
-    "your-turn": "Your Turn",
-    skipped: "No-show",
-    refunded: "Refunded",
-    failed: "Failed",
-    rejected: "Rejected",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
-        styles[normalized] || "bg-gray-100 text-gray-700"
-      }`}
-    >
-      {labels[normalized] || normalized.replaceAll("-", " ")}
-    </span>
-  );
-}
+/* ----------------------------------
+   PAYMENT HELPERS
+---------------------------------- */
 
 function getPaymentAmount(booking) {
   let value;
   let unit;
 
   if (
+    booking.originalPaymentAmount !== null &&
+    booking.originalPaymentAmount !== undefined &&
+    booking.originalPaymentAmount !== ""
+  ) {
+    value = booking.originalPaymentAmount;
+    unit = "rupees";
+  } else if (
     booking.amount !== null &&
     booking.amount !== undefined &&
     booking.amount !== ""
@@ -643,7 +846,10 @@ function getPaymentAmount(booking) {
   }
 
   const amount = Number(value);
-  if (!Number.isFinite(amount) || amount < 0) return null;
+
+  if (!Number.isFinite(amount) || amount < 0) {
+    return null;
+  }
 
   const rupees = unit === "rupees" ? amount : amount / 100;
 
@@ -653,6 +859,10 @@ function getPaymentAmount(booking) {
     maximumFractionDigits: 2,
   }).format(rupees);
 }
+
+/* ----------------------------------
+   LOCATION HELPERS
+---------------------------------- */
 
 function getClinicCoordinates(booking) {
   const lat =
@@ -698,7 +908,13 @@ function getClinicCoordinates(booking) {
   };
 }
 
-function getGoogleMapsUrl(booking, lat, lng, hasCoordinates, address) {
+function getGoogleMapsUrl(
+  booking,
+  lat,
+  lng,
+  hasCoordinates,
+  address
+) {
   if (hasCoordinates) {
     return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
   }
@@ -709,7 +925,8 @@ function getGoogleMapsUrl(booking, lat, lng, hasCoordinates, address) {
     )}`;
   }
 
-  const clinicName = booking.clinicName || booking.clinic?.name || "";
+  const clinicName =
+    booking.clinicName || booking.clinic?.name || "";
 
   if (clinicName) {
     return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
@@ -719,6 +936,101 @@ function getGoogleMapsUrl(booking, lat, lng, hasCoordinates, address) {
 
   return null;
 }
+
+/* ----------------------------------
+   CACHE HELPERS
+---------------------------------- */
+
+function getBookingsCacheKey(session) {
+  const userId = session?.user?.id;
+  const email = session?.user?.email?.trim().toLowerCase();
+  const identity = userId || email;
+
+  return identity ? `my-bookings:${identity}` : null;
+}
+
+function getCachedBookings(key) {
+  if (!key) return null;
+
+  const cached = bookingsCache.get(key);
+
+  if (!cached) return null;
+
+  if (Date.now() > cached.expiresAt) {
+    bookingsCache.delete(key);
+    return null;
+  }
+
+  return cached.bookings;
+}
+
+function setCachedBookings(key, bookings) {
+  if (!key) return;
+
+  bookingsCache.set(key, {
+    bookings,
+    expiresAt: Date.now() + BOOKINGS_CACHE_TTL,
+  });
+}
+
+/* ----------------------------------
+   STATUS BADGE
+---------------------------------- */
+
+function StatusBadge({ status, peopleAhead, booking }) {
+  const normalized = normalizeStatus(status);
+
+  const styles = {
+    waiting: "bg-amber-100 text-amber-800",
+    confirmed: "bg-green-100 text-green-800",
+    completed: "bg-blue-100 text-blue-800",
+    cancelled: "bg-red-100 text-red-800",
+    "in-progress": "bg-purple-100 text-purple-800",
+    serving: "bg-purple-100 text-purple-800",
+    "your-turn": "bg-indigo-100 text-indigo-800",
+    skipped: "bg-gray-100 text-gray-700",
+    refunded: "bg-gray-100 text-gray-700",
+    failed: "bg-red-100 text-red-800",
+    rejected: "bg-red-100 text-red-800",
+  };
+
+  const labels = {
+    waiting:
+      peopleAhead !== null && peopleAhead !== undefined
+        ? Number(peopleAhead) === 0
+          ? "Your turn"
+          : `${peopleAhead} ${
+              Number(peopleAhead) === 1 ? "person" : "people"
+            } ahead`
+        : "Waiting",
+    confirmed: "Confirmed",
+    completed: "Completed",
+    cancelled: "Cancelled",
+    "in-progress": "In Progress",
+    serving: "In Progress",
+    "your-turn": "Your Turn",
+    skipped: "No-show",
+    refunded: "Refunded",
+    failed: "Failed",
+    rejected: "Rejected",
+  };
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
+        styles[normalized] || "bg-gray-100 text-gray-700"
+      }`}
+    >
+      {normalized === "cancelled"
+        ? getCancellationLabel(booking)
+        : labels[normalized] || normalized.replaceAll("-", " ")}
+    </span>
+  );
+}
+
+/* ----------------------------------
+   BOOKING CARD
+---------------------------------- */
 
 function BookingCard({ booking, now, onCancel, cancelling }) {
   const { start, end } = getSlotTimes(booking);
@@ -734,7 +1046,9 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
     booking.name ||
     "Not specified";
 
-  const patientType = patient.type || booking.patientType || "self";
+  const patientType =
+    patient.type || booking.patientType || "self";
+
   const patientAge = patient.age ?? booking.age;
   const patientGender = patient.gender || booking.gender;
 
@@ -753,9 +1067,7 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
   const { lat, lng, hasCoordinates } = getClinicCoordinates(booking);
 
   const doctorName =
-    booking.doctorName ||
-    booking.doctor?.name ||
-    "";
+    booking.doctorName || booking.doctor?.name || "";
 
   const address =
     booking.address ||
@@ -793,12 +1105,70 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
     booking.bookingReference ||
     "N/A";
 
+  const refundStatus = String(
+    booking.refundStatus ||
+      booking.payment?.refundStatus ||
+      (booking.paymentStatus === "refunded" ? "completed" : "") ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const formattedRefundAmount = useMemo(() => {
+    const rawVal =
+      booking.refundAmount ??
+      booking.payment?.refundAmount ??
+      booking.originalPaymentAmount ??
+      booking.amount;
+
+    if (rawVal === undefined || rawVal === null || rawVal === "") {
+      return null;
+    }
+
+    const numericVal = Number(rawVal);
+    if (!Number.isFinite(numericVal) || numericVal < 0) return null;
+
+    const rupees = numericVal > 10000 ? numericVal / 100 : numericVal;
+
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: booking.currency || "INR",
+      maximumFractionDigits: 2,
+    }).format(rupees);
+  }, [
+    booking.refundAmount,
+    booking.payment?.refundAmount,
+    booking.originalPaymentAmount,
+    booking.amount,
+    booking.currency,
+  ]);
+
+const showRefundCard =
+  booking.status?.toLowerCase() === "cancelled" &&
+  (
+    Boolean(refundStatus) ||
+    booking.paymentStatus === "refunded" ||
+    booking.refundAmount !== undefined ||
+    Boolean(booking.refundId)
+  );
+
+  const bookingId = booking._id || booking.id;
+  const cancellationAllowed = canCancelBooking(booking);
+  const cancellationEligibility = getCancellationEligibilityInfo(
+    booking,
+    now
+  );
+
   return (
     <article className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md sm:p-6">
+      {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <Ticket size={20} className="shrink-0 text-indigo-600" />
+            <Ticket
+              size={20}
+              className="shrink-0 text-indigo-600"
+            />
             <h3 className="break-words text-lg font-bold text-gray-900">
               Token {token}
             </h3>
@@ -810,7 +1180,10 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
 
           {doctorName && (
             <p className="mt-1 flex items-center gap-1.5 text-sm text-gray-700">
-              <Stethoscope size={15} className="shrink-0 text-indigo-500" />
+              <Stethoscope
+                size={15}
+                className="shrink-0 text-indigo-500"
+              />
               {doctorName}
             </p>
           )}
@@ -822,9 +1195,66 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
           )}
         </div>
 
-        <StatusBadge status={status} peopleAhead={peopleAhead} />
+        <StatusBadge
+          status={status}
+          peopleAhead={peopleAhead}
+          booking={booking}
+        />
       </div>
 
+      {/* Cancellation Details */}
+      {status === "cancelled" && (
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+          <div className="flex items-center gap-2">
+            <XCircle size={17} className="shrink-0 text-red-600" />
+            <p className="text-sm font-semibold text-red-800">
+              {getCancellationLabel(booking)}
+            </p>
+          </div>
+
+          <p className="mt-1 text-sm text-red-700">
+            {getCancellationDescription(booking)}
+          </p>
+
+          <div className="mt-3 rounded-lg border border-red-100 bg-white/80 p-3">
+            <p className="text-xs font-semibold text-gray-600">
+              Booking and cancellation timeline
+            </p>
+            <p className="mt-1 text-xs text-gray-700">
+              Booked on: {formatDateTime(getBookedAtValue(booking))}
+            </p>
+            <p className="mt-1 text-xs text-gray-700">
+              Cancelled on:{" "}
+              {formatDateTime(
+                booking.cancelledAt ||
+                  booking.canceledAt ||
+                  booking.cancellation?.cancelledAt ||
+                  booking.cancellation?.canceledAt
+              )}
+            </p>
+            {(() => {
+              const cancellationWindow =
+                getCancellationWindowInfo(booking);
+
+              return (
+                <p
+                  className={`mt-2 text-sm font-semibold ${
+                    cancellationWindow.withinTwoHours === true
+                      ? "text-green-700"
+                      : cancellationWindow.withinTwoHours === false
+                      ? "text-red-700"
+                      : "text-amber-700"
+                  }`}
+                >
+                  {cancellationWindow.message}
+                </p>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Live Queue */}
       {canShowQueue && (
         <div className="mt-5 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
           <div className="flex items-center gap-2">
@@ -843,10 +1273,14 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
             </div>
 
             <div className="rounded-lg bg-white p-3">
-              <p className="text-xs text-gray-500">Doctor's Session</p>
+              <p className="text-xs text-gray-500">
+                Doctor's Session
+              </p>
               <p
                 className={`mt-1 text-lg font-bold ${
-                  sessionInfo.started ? "text-green-700" : "text-indigo-700"
+                  sessionInfo.started
+                    ? "text-green-700"
+                    : "text-indigo-700"
                 }`}
               >
                 {sessionInfo.label}
@@ -856,7 +1290,21 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
         </div>
       )}
 
+      {/* Booking Information */}
       <div className="mt-5 grid gap-5 sm:grid-cols-2">
+        <div className="flex items-start gap-3">
+          <Clock
+            size={18}
+            className="mt-0.5 shrink-0 text-indigo-600"
+          />
+          <div>
+            <p className="text-xs text-gray-500">Booked on</p>
+            <p className="mt-1 text-sm font-medium text-gray-800">
+              {formatDateTime(getBookedAtValue(booking))}
+            </p>
+          </div>
+        </div>
+
         <div className="flex items-start gap-3">
           <CalendarDays
             size={18}
@@ -916,10 +1364,8 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
               size={18}
               className="mt-0.5 shrink-0 text-indigo-600"
             />
-
             <div className="min-w-0">
               <p className="text-xs text-gray-500">Clinic</p>
-
               <p className="mt-1 break-words text-sm font-medium text-gray-800">
                 {clinicName || "Clinic"}
               </p>
@@ -969,64 +1415,128 @@ function BookingCard({ booking, now, onCancel, cancelling }) {
             <div>
               <p className="text-xs text-gray-500">Payment amount</p>
               <p className="mt-1 text-sm font-semibold text-gray-800">
-                {paymentAmount}
+                {Number(paymentAmount)/100}
               </p>
             </div>
           </div>
         )}
       </div>
 
+      {/* Emergency Priority */}
       {booking.priority === "emergency" && (
         <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
           Emergency priority
         </div>
       )}
 
-      {booking.paymentStatus &&
-        booking.paymentStatus !== "unknown" && (
-          <div className="mt-4 border-t border-gray-100 pt-3">
-            <span className="text-xs text-gray-500">
-              Payment status:{" "}
-            </span>
-            <span className="text-xs font-semibold capitalize text-gray-700">
-              {booking.paymentStatus}
-            </span>
+      {/* Payment Status */}
+      {booking.paymentStatus && booking.paymentStatus !== "unknown" && (
+        <div className="mt-4 border-t border-gray-100 pt-3">
+          <span className="text-xs text-gray-500">Payment status: </span>
+          <span className="text-xs font-semibold capitalize text-gray-700">
+            {booking.paymentStatus}
+          </span>
+        </div>
+      )}
+
+      {/* Refund Status Card */}
+      {showRefundCard && (
+        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+          <p className="text-xs text-gray-500">Refund status</p>
+          <p className="mt-1 text-sm font-semibold capitalize text-gray-800">
+            {refundStatus ? refundStatus.replaceAll("_", " ") : "Completed"}
+          </p>
+
+          {formattedRefundAmount && (
+            <p className="mt-1 text-xs font-medium text-gray-700">
+              Refund amount: {Number(formattedRefundAmount)/100}
+            </p>
+          )}
+
+          {booking.refundExpectedDays && (
+            <p className="mt-1 text-xs text-gray-500">
+              Expected time: {booking.refundExpectedDays}
+            </p>
+          )}
+
+          {booking.refundInitiatedAt && (
+            <p className="mt-1 text-xs text-gray-500">
+              Initiated: {formatDate(booking.refundInitiatedAt)}
+            </p>
+          )}
+
+          {booking.refundId && (
+            <p className="mt-1 break-all text-xs text-gray-500">
+              Refund ID: {booking.refundId}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Cancellation Action */}
+      {cancellationAllowed && (
+        <div className="mt-5 border-t border-gray-100 pt-4">
+          <div
+            className={`mb-3 rounded-xl border p-3 ${
+              cancellationEligibility.refundable === true
+                ? "border-green-200 bg-green-50"
+                : cancellationEligibility.refundable === false
+                ? "border-amber-200 bg-amber-50"
+                : "border-gray-200 bg-gray-50"
+            }`}
+          >
+            <p
+              className={`text-sm font-semibold ${
+                cancellationEligibility.refundable === true
+                  ? "text-green-800"
+                  : cancellationEligibility.refundable === false
+                  ? "text-amber-800"
+                  : "text-gray-700"
+              }`}
+            >
+              {cancellationEligibility.refundable === true
+                ? "Refund eligible"
+                : cancellationEligibility.refundable === false
+                ? "Cancellation without refund"
+                : "Refund eligibility"}
+            </p>
+
+            <p className="mt-1 text-xs text-gray-700">
+              {cancellationEligibility.message}
+            </p>
           </div>
-        )}
 
-    {canCancelBooking(booking, now) && (
-  <div className="mt-5 border-t border-gray-100 pt-4">
-    <button
-      type="button"
-      onClick={() => onCancel?.(booking)}
-      disabled={cancelling}
-      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-    >
-      <XCircle size={16} />
-      {cancelling ? "Cancelling..." : "Cancel Booking"}
-    </button>
+          <button
+            type="button"
+            onClick={() => onCancel?.(booking)}
+            disabled={cancelling || !bookingId}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+          >
+            <XCircle size={16} />
+            {cancelling ? "Cancelling..." : "Cancel Booking"}
+          </button>
 
-    <p className="mt-2 text-xs text-gray-500">
-      Cancel within 2 hours of booking creation to qualify for a refund.
-    </p>
-
-    <p className="mt-1 text-xs text-green-700">
-      Eligible refunds are generally credited within 3–4 working days.
-    </p>
-  </div>
-)}
+          <p className="mt-2 text-xs text-gray-500">
+            You can cancel before the doctor starts the session. Refund
+            eligibility depends on whether cancellation happens within 2
+            hours of booking creation.
+          </p>
+        </div>
+      )}
     </article>
   );
 }
+
+/* ----------------------------------
+   EMPTY STATE
+---------------------------------- */
 
 function EmptyState({ title, description }) {
   return (
     <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-12 text-center">
       <Ticket size={36} className="mx-auto text-gray-400" />
-
       <h3 className="mt-3 font-semibold text-gray-800">{title}</h3>
       <p className="mt-1 text-sm text-gray-500">{description}</p>
-
       <Link
         href="/"
         className="mt-5 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700"
@@ -1038,6 +1548,10 @@ function EmptyState({ title, description }) {
   );
 }
 
+/* ----------------------------------
+   MAIN PAGE
+---------------------------------- */
+
 export default function MyBookingsPage() {
   const { data: session, status: sessionStatus } = useSession();
 
@@ -1048,19 +1562,23 @@ export default function MyBookingsPage() {
   const [now, setNow] = useState(() => Date.now());
   const [cancellingBookingId, setCancellingBookingId] = useState(null);
 
+  const mountedRef = useRef(false);
   const userCacheKey = getBookingsCacheKey(session);
 
+  /* Fetch Bookings */
   const fetchBookings = useCallback(
     async (isRefresh = false, silent = false) => {
       if (!userCacheKey) return;
 
-      try {
+      if (!silent) {
         if (isRefresh) {
-          if (!silent) setRefreshing(true);
-        } else if (!silent) {
+          setRefreshing(true);
+        } else {
           setLoading(true);
         }
+      }
 
+      try {
         setError("");
 
         let requestPromise = bookingsRequests.get(userCacheKey);
@@ -1098,38 +1616,65 @@ export default function MyBookingsPage() {
 
         const freshBookings = await requestPromise;
 
+        if (!mountedRef.current) return;
+
         setCachedBookings(userCacheKey, freshBookings);
         setBookings(freshBookings);
       } catch (err) {
+        if (!mountedRef.current) return;
+
         setError(
           err?.message ||
             "Something went wrong while loading bookings."
         );
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (mountedRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [userCacheKey]
   );
 
+  /* Cancel Booking */
   const handleCancelBooking = useCallback(
     async (booking) => {
       const bookingId = booking?._id || booking?.id;
 
       if (!bookingId) {
-        setError("Unable to identify this booking. Please refresh and try again.");
+        toast.error(
+          "Unable to identify this booking. Please refresh."
+        );
         return;
       }
 
-const confirmed = window.confirm(
-  "Are you sure you want to cancel this booking?\n\n" +
-  "Cancellation is allowed within 2 hours of booking creation.\n\n" +
-  "If payment was successful, your eligible refund will be initiated and generally credited within 3–4 working days.\n\n" +
-  "This action cannot be undone."
-);
+      if (cancellingBookingId) return;
 
-if (!confirmed) return;
+      if (!canCancelBooking(booking)) {
+        toast.error("This booking can no longer be cancelled.");
+        return;
+      }
+
+      const cancellationEligibility = getCancellationEligibilityInfo(
+        booking,
+        Date.now()
+      );
+
+      const refundMessage =
+        cancellationEligibility.refundable === true
+          ? "Your booking is within the 2-hour refund window. An eligible refund will be initiated."
+          : cancellationEligibility.refundable === false
+          ? "The 2-hour refund window has expired. You can cancel, but you will not receive a refund."
+          : "Refund eligibility will be verified by the server.";
+
+      const confirmed = window.confirm(
+        "Are you sure you want to cancel this booking?\n\n" +
+          refundMessage +
+          "\n\nThis action cannot be undone."
+      );
+
+      if (!confirmed) return;
 
       try {
         setCancellingBookingId(String(bookingId));
@@ -1141,55 +1686,104 @@ if (!confirmed) return;
             "Content-Type": "application/json",
             Accept: "application/json",
           },
-          body: JSON.stringify({ bookingId: String(bookingId) }),
+          body: JSON.stringify({
+            bookingId: String(bookingId),
+            cancelledBy: "patient",
+            cancellationReason: "Cancelled by patient",
+          }),
         });
 
         const data = await response.json().catch(() => ({}));
+
         if (!response.ok || !data.success) {
-          throw new Error(data.message || "Unable to cancel this booking.");
+          throw new Error(
+            data.message || "Unable to cancel this booking."
+          );
         }
 
-      setBookings((current) =>
-  current.map((item) =>
-    String(item._id || item.id) === String(bookingId)
-      ? {
-          ...item,
+        const updatedBooking = {
+          ...booking,
           ...(data.booking || {}),
           status: "cancelled",
+          cancelledBy:
+            data.booking?.cancelledBy ||
+            booking.cancelledBy ||
+            "patient",
+          cancellationReason:
+            data.booking?.cancellationReason ||
+            booking.cancellationReason ||
+            "Cancelled by patient",
+          cancelledAt:
+            data.booking?.cancelledAt || new Date().toISOString(),
           refundStatus:
             data.booking?.refundStatus ||
             data.refundStatus ||
-            item.refundStatus,
+            booking.refundStatus,
+        };
+
+        setBookings((current) => {
+          const updated = current.map((item) =>
+            String(item._id || item.id) === String(bookingId)
+              ? updatedBooking
+              : item
+          );
+
+          setCachedBookings(userCacheKey, updated);
+
+          return updated;
+        });
+
+        bookingsCache.delete(userCacheKey);
+
+        const refundStatus = String(
+          data.booking?.refundStatus || data.refundStatus || ""
+        ).toLowerCase();
+
+        if (["initiated", "processing"].includes(refundStatus)) {
+          toast.success(
+            "Booking cancelled successfully. Your refund has been initiated."
+          );
+        } else if (refundStatus === "completed") {
+          toast.success(
+            "Booking cancelled successfully. Your refund is completed."
+          );
+        } else if (["failed", "rejected"].includes(refundStatus)) {
+          toast.error(
+            "Booking cancelled, but the refund could not be completed. Please check your refund status."
+          );
+        } else if (
+          ["not-eligible", "not_eligible", "not eligible"].includes(
+            refundStatus
+          )
+        ) {
+          toast.success(
+            "Booking cancelled successfully. No refund is applicable because the 2-hour refund window expired."
+          );
+        } else {
+          toast.success("Booking cancelled successfully.");
         }
-      : item
-  )
-);
 
-if (userCacheKey) {
-  bookingsCache.delete(userCacheKey);
-}
-
-const refundStatus =
-  data.booking?.refundStatus || data.refundStatus;
-
-if (refundStatus === "initiated" || refundStatus === "processing") {
-  toast.success(
-    "Booking cancelled successfully!\n\n" +
-    "Your refund has been initiated. It should be credited within 3–4 working days."
-  );
-} else {
-  toast.success("Booking cancelled successfully.");
-}
-
-await fetchBookings(true, true);
+        await fetchBookings(true, true);
       } catch (err) {
-        setError(err?.message || "Unable to cancel this booking.");
+        const message =
+          err?.message || "Unable to cancel this booking.";
+
+        setError(message);
+        toast.error(message);
       } finally {
         setCancellingBookingId(null);
       }
     },
-    [fetchBookings, userCacheKey]
+    [cancellingBookingId, fetchBookings, userCacheKey]
   );
+
+  /* Mount logic */
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (sessionStatus === "loading") return;
@@ -1201,24 +1795,33 @@ await fetchBookings(true, true);
       return;
     }
 
-    fetchBookings();
-  }, [session, sessionStatus, fetchBookings]);
+    const cached = getCachedBookings(userCacheKey);
 
+    if (cached !== null) {
+      setBookings(cached);
+      setLoading(false);
+    }
+
+    fetchBookings(false, cached !== null);
+  }, [session, sessionStatus, userCacheKey, fetchBookings]);
+
+  /* Auto Refresh */
   useEffect(() => {
     if (sessionStatus !== "authenticated" || !session) return;
 
     const interval = setInterval(() => {
       setNow(Date.now());
       fetchBookings(true, true);
-    }, 20000);
+    }, REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
   }, [session, sessionStatus, fetchBookings]);
 
+  /* Clock timer */
   useEffect(() => {
     const interval = setInterval(() => {
       setNow(Date.now());
-    }, 10000);
+    }, 10_000);
 
     return () => clearInterval(interval);
   }, []);
@@ -1248,12 +1851,14 @@ await fetchBookings(true, true);
     return sortedBookings.filter((booking) => {
       const dateKey = getIndiaDateKey(getDateValue(booking));
 
-      if (isHistoryStatus(booking.status)) return true;
+      if (isHistoryStatus(booking.status)) {
+        return true;
+      }
+
       if (!dateKey) return true;
 
       return (
-        dateKey < todayKey ||
-        shouldMarkCompleted(booking)
+        dateKey < todayKey || shouldMarkCompleted(booking)
       );
     });
   }, [sortedBookings, todayKey]);
@@ -1262,12 +1867,10 @@ await fetchBookings(true, true);
     return (
       <>
         <Header showBack={true} />
-
         <main className="min-h-screen bg-gray-50 px-4 py-12">
           <div className="mx-auto max-w-5xl animate-pulse">
             <div className="h-8 w-56 rounded bg-gray-200" />
             <div className="mt-3 h-4 w-80 max-w-full rounded bg-gray-200" />
-
             <div className="mt-8 space-y-4">
               <div className="h-44 rounded-2xl bg-gray-200" />
               <div className="h-44 rounded-2xl bg-gray-200" />
@@ -1282,19 +1885,15 @@ await fetchBookings(true, true);
     return (
       <>
         <Header showBack={true} />
-
         <main className="flex min-h-[70vh] items-center justify-center bg-gray-50 px-4">
           <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-sm">
             <Ticket size={42} className="mx-auto text-indigo-600" />
-
             <h1 className="mt-4 text-2xl font-bold text-gray-900">
               Login required
             </h1>
-
             <p className="mt-2 text-gray-500">
               Please log in to view your bookings.
             </p>
-
             <Link
               href="/login"
               className="mt-6 inline-flex rounded-xl bg-indigo-600 px-6 py-3 font-semibold text-white transition hover:bg-indigo-700"
@@ -1313,6 +1912,7 @@ await fetchBookings(true, true);
 
       <main className="min-h-screen bg-gray-50 px-4 py-8 sm:px-6 lg:px-8">
         <div className="mx-auto max-w-5xl">
+          {/* Header */}
           <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h1 className="text-3xl font-bold text-gray-900">
@@ -1337,20 +1937,16 @@ await fetchBookings(true, true);
             </button>
           </div>
 
+          {/* Error Banner */}
           {error && (
             <div
               role="alert"
               className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
             >
               <div className="flex items-start gap-2">
-                <AlertCircle
-                  size={18}
-                  className="mt-0.5 shrink-0"
-                />
-
+                <AlertCircle size={18} className="mt-0.5 shrink-0" />
                 <div>
                   <p>{error}</p>
-
                   <button
                     type="button"
                     onClick={() => fetchBookings()}
@@ -1364,18 +1960,19 @@ await fetchBookings(true, true);
             </div>
           )}
 
+          {/* Empty Bookings Message */}
           {!error && bookings.length === 0 && (
             <div className="mb-8 rounded-xl border border-indigo-100 bg-indigo-50 p-4 text-sm text-indigo-800">
               You do not have any bookings yet.
             </div>
           )}
 
+          {/* Upcoming Section */}
           <section className="mb-10">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-xl font-bold text-gray-900">
                 Upcoming bookings
               </h2>
-
               <span className="rounded-full bg-indigo-100 px-3 py-1 text-sm font-semibold text-indigo-700">
                 {upcomingBookings.length}
               </span>
@@ -1383,22 +1980,26 @@ await fetchBookings(true, true);
 
             {upcomingBookings.length > 0 ? (
               <div className="space-y-4">
-                {upcomingBookings.map((booking, index) => (
-                  <BookingCard
-                    key={
-                      booking._id ||
-                      booking.id ||
-                      booking.bookingReference ||
-                      index
-                    }
-                    booking={booking}
-                    now={now}
-                    onCancel={handleCancelBooking}
-                    cancelling={
-                      cancellingBookingId === String(booking._id || booking.id)
-                    }
-                  />
-                ))}
+                {upcomingBookings.map((booking, index) => {
+                  const id =
+                    booking._id ||
+                    booking.id ||
+                    booking.bookingReference ||
+                    index;
+
+                  return (
+                    <BookingCard
+                      key={id}
+                      booking={booking}
+                      now={now}
+                      onCancel={handleCancelBooking}
+                      cancelling={
+                        cancellingBookingId ===
+                        String(booking._id || booking.id)
+                      }
+                    />
+                  );
+                })}
               </div>
             ) : (
               <EmptyState
@@ -1408,12 +2009,12 @@ await fetchBookings(true, true);
             )}
           </section>
 
+          {/* History Section */}
           <section className="mb-10">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-xl font-bold text-gray-900">
                 Booking history
               </h2>
-
               <span className="rounded-full bg-gray-200 px-3 py-1 text-sm font-semibold text-gray-700">
                 {pastBookings.length}
               </span>
@@ -1421,22 +2022,26 @@ await fetchBookings(true, true);
 
             {pastBookings.length > 0 ? (
               <div className="space-y-4">
-                {pastBookings.map((booking, index) => (
-                  <BookingCard
-                    key={
-                      booking._id ||
-                      booking.id ||
-                      booking.bookingReference ||
-                      index
-                    }
-                    booking={booking}
-                    now={now}
-                    onCancel={handleCancelBooking}
-                    cancelling={
-                      cancellingBookingId === String(booking._id || booking.id)
-                    }
-                  />
-                ))}
+                {pastBookings.map((booking, index) => {
+                  const id =
+                    booking._id ||
+                    booking.id ||
+                    booking.bookingReference ||
+                    index;
+
+                  return (
+                    <BookingCard
+                      key={id}
+                      booking={booking}
+                      now={now}
+                      onCancel={handleCancelBooking}
+                      cancelling={
+                        cancellingBookingId ===
+                        String(booking._id || booking.id)
+                      }
+                    />
+                  );
+                })}
               </div>
             ) : (
               <EmptyState

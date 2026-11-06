@@ -1,4 +1,3 @@
-
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import clientPromise from "@/lib/mongodb";
@@ -29,27 +28,19 @@ const BLOCKED_STATUSES = [
   "cancellation-processing",
 ];
 
-const CANCELLATION_REASON = "Cancelled by patient";
-
 // --------------------------------------------------
 // COMMON HELPERS
 // --------------------------------------------------
 
 function jsonError(message, status = 400) {
   return NextResponse.json(
-    {
-      success: false,
-      message,
-    },
+    { success: false, message },
     { status }
   );
 }
 
 function escapeRegex(value) {
-  return String(value).replace(
-    /[.*+?^${}()|[\]\\]/g,
-    "\\$&"
-  );
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizeStatus(status) {
@@ -71,24 +62,48 @@ function getCreatedAt(booking) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function isCancellable(status) {
-  return CANCELLABLE_STATUSES.includes(
-    normalizeStatus(status)
-  );
+function getCancellationInfo(createdAt, cancelledAt, cancelledBy = "patient") {
+  const isDoctorCancellation =
+    cancelledBy === "doctor" || cancelledBy === "staff";
+
+  const elapsedMs =
+    cancelledAt.getTime() - createdAt.getTime();
+
+  if (elapsedMs < 0) {
+    throw new Error(
+      "Booking creation time is later than cancellation time."
+    );
+  }
+
+  const elapsedMinutes = Math.floor(elapsedMs / 60000);
+
+  // Doctor/staff cancellation ALWAYS bypasses 2-hour check and gets full refund
+  const cancelledWithinTwoHours =
+    isDoctorCancellation || elapsedMs <= TWO_HOURS_MS;
+
+  return {
+    cancelledWithinTwoHours,
+    elapsedMinutes,
+    cancellationWindow: isDoctorCancellation
+      ? "doctor-cancellation"
+      : cancelledWithinTwoHours
+      ? "within-2-hours"
+      : "after-2-hours",
+    refundEligible: cancelledWithinTwoHours,
+  };
 }
 
-function isWithinCancellationPeriod(createdAt, now) {
-  const elapsed =
-    now.getTime() - createdAt.getTime();
+function isCancellable(status) {
+  const normalized = normalizeStatus(status);
 
   return (
-    elapsed >= 0 &&
-    elapsed <= TWO_HOURS_MS
+    CANCELLABLE_STATUSES.includes(normalized) &&
+    !BLOCKED_STATUSES.includes(normalized)
   );
 }
 
 // --------------------------------------------------
-// AUTHENTICATION
+// AUTHENTICATION / BOOKING OWNERSHIP
 // --------------------------------------------------
 
 function buildUserQuery(token) {
@@ -136,44 +151,6 @@ function buildUserQuery(token) {
   return clauses;
 }
 
-function buildUserDocumentQuery(token) {
-  const clauses = [];
-
-  const ids = [
-    String(token.id || "").trim(),
-    String(token.sub || "").trim(),
-  ].filter(Boolean);
-
-  for (const id of new Set(ids)) {
-    clauses.push({ _id: id });
-
-    if (ObjectId.isValid(id) && id.length === 24) {
-      clauses.push({
-        _id: new ObjectId(id),
-      });
-    }
-  }
-
-  const email = String(token.email || "")
-    .trim()
-    .toLowerCase();
-
-  if (email) {
-    clauses.push({
-      email: {
-        $regex: `^${escapeRegex(email)}$`,
-        $options: "i",
-      },
-    });
-  }
-
-  return clauses;
-}
-
-// --------------------------------------------------
-// BOOKING IDENTIFIERS
-// --------------------------------------------------
-
 function getIdentifierQuery(identifier) {
   const values = [identifier];
 
@@ -190,17 +167,6 @@ function getIdentifierQuery(identifier) {
     { bookingId: { $in: values } },
     { bookingReference: { $in: values } },
   ];
-}
-
-function getBookingIdentifiers(booking) {
-  return [
-    booking?._id,
-    booking?.id,
-    booking?.bookingId,
-    booking?.bookingReference,
-  ]
-    .filter(Boolean)
-    .map(String);
 }
 
 function getRazorpayPaymentId(booking) {
@@ -231,13 +197,11 @@ function getRazorpayCredentials() {
   return {
     authorization:
       "Basic " +
-      Buffer.from(
-        `${keyId}:${keySecret}`
-      ).toString("base64"),
+      Buffer.from(`${keyId}:${keySecret}`).toString("base64"),
   };
 }
 
-async function initiateRazorpayRefund(booking, now) {
+async function initiateRazorpayRefund(booking, now, reason = "Cancelled by patient") {
   const paymentId = getRazorpayPaymentId(booking);
 
   const bookingPaymentStatus = String(
@@ -253,7 +217,7 @@ async function initiateRazorpayRefund(booking, now) {
     "successful",
   ];
 
-  // No successful payment: no refund required.
+  // No payment means no refund is required.
   if (
     !paymentId &&
     !paidStatuses.includes(bookingPaymentStatus)
@@ -262,8 +226,7 @@ async function initiateRazorpayRefund(booking, now) {
       refundStatus: "not-applicable",
       refundId: null,
       refundAmount: null,
-      paymentStatus:
-        bookingPaymentStatus || "unpaid",
+      paymentStatus: bookingPaymentStatus || "unpaid",
     };
   }
 
@@ -275,7 +238,7 @@ async function initiateRazorpayRefund(booking, now) {
 
   const credentials = getRazorpayCredentials();
 
-  // Verify payment directly with Razorpay.
+  // Verify payment with Razorpay.
   const paymentResponse = await fetch(
     `https://api.razorpay.com/v1/payments/${encodeURIComponent(
       paymentId
@@ -313,7 +276,7 @@ async function initiateRazorpayRefund(booking, now) {
     };
   }
 
-  // Full refund: no amount means the full captured amount.
+  // Initiate full refund.
   const refundResponse = await fetch(
     `https://api.razorpay.com/v1/payments/${encodeURIComponent(
       paymentId
@@ -326,7 +289,7 @@ async function initiateRazorpayRefund(booking, now) {
       },
       body: JSON.stringify({
         notes: {
-          reason: CANCELLATION_REASON,
+          reason: reason,
           bookingReference: String(
             booking.bookingReference ||
             booking.bookingId ||
@@ -364,7 +327,6 @@ async function initiateRazorpayRefund(booking, now) {
     refundStatus: refundData.status || "pending",
     refundId: refundData.id,
 
-    // Razorpay amounts are in paise.
     refundAmount:
       typeof refundData.amount === "number"
         ? refundData.amount
@@ -377,15 +339,10 @@ async function initiateRazorpayRefund(booking, now) {
 }
 
 // --------------------------------------------------
-// REFUND RECORD CREATION
+// REFUND RECORDS
 // --------------------------------------------------
 
-function createRefundRecord({
-  booking,
-  user,
-  refund,
-  now,
-}) {
+function createRefundRecord({ booking, refund, now, cancellationReason }) {
   const paymentId = getRazorpayPaymentId(booking);
 
   const appointmentDate =
@@ -405,8 +362,6 @@ function createRefundRecord({
   return {
     refundId: refund.refundId,
     refundStatus: refund.refundStatus,
-
-    // Amount is stored in paise.
     refundAmount: refund.refundAmount,
     currency: "INR",
 
@@ -416,35 +371,26 @@ function createRefundRecord({
     refundExpectedDays:
       refund.refundExpectedDays || null,
 
-    // User details
     userId: String(
-      user?._id ||
-      booking.userId ||
-      booking.user ||
-      ""
+      booking.userId || booking.user || ""
     ),
 
     userName:
-      user?.name ||
       booking.userName ||
       booking.patient?.name ||
       booking.patientName ||
       null,
 
     userEmail:
-      user?.email ||
       booking.userEmail ||
       booking.email ||
       null,
 
     userPhone:
-      user?.phone ||
-      user?.mobile ||
       booking.phone ||
       booking.patient?.phone ||
       null,
 
-    // Booking details
     bookingId: String(
       booking._id ||
       booking.bookingId ||
@@ -476,14 +422,8 @@ function createRefundRecord({
 
     patient:
       booking.patient || {
-        name:
-          booking.patientName ||
-          user?.name ||
-          null,
-        phone:
-          booking.phone ||
-          user?.phone ||
-          null,
+        name: booking.patientName || null,
+        phone: booking.phone || null,
       },
 
     appointment: {
@@ -495,7 +435,6 @@ function createRefundRecord({
         null,
     },
 
-    // Payment details
     paymentId,
     razorpayPaymentId: paymentId,
 
@@ -511,102 +450,19 @@ function createRefundRecord({
       null,
 
     paymentStatus: "refunded",
-
-    cancellationReason: CANCELLATION_REASON,
-
+    cancellationReason,
     createdAt: now,
     updatedAt: now,
   };
 }
 
-// --------------------------------------------------
-// UPDATE USERS EMBEDDED BOOKING
-// --------------------------------------------------
-
-async function updateEmbeddedBooking({
-  users,
-  user,
-  booking,
-  refund,
-  now,
-}) {
-  if (!user?._id) return;
-
-  const identifiers = getBookingIdentifiers(booking);
-
-  if (!identifiers.length) return;
-
-  const identifierClauses = [];
-
-  for (const identifier of identifiers) {
-    const values = [identifier];
-
-    if (
-      ObjectId.isValid(identifier) &&
-      identifier.length === 24
-    ) {
-      values.push(new ObjectId(identifier));
-    }
-
-    identifierClauses.push(
-      { _id: { $in: values } },
-      { id: { $in: values } },
-      { bookingId: { $in: values } },
-      { bookingReference: { $in: values } }
-    );
-  }
-
-  await users.updateOne(
-    {
-      _id: user._id,
-      bookings: {
-        $elemMatch: {
-          $or: identifierClauses,
-        },
-      },
-    },
-    {
-      $set: {
-        "bookings.$.status": "cancelled",
-        "bookings.$.cancelledAt": now,
-        "bookings.$.updatedAt": now,
-        "bookings.$.cancellationReason":
-          CANCELLATION_REASON,
-
-        "bookings.$.paymentStatus":
-          refund.paymentStatus,
-
-        "bookings.$.refundStatus":
-          refund.refundStatus,
-
-        "bookings.$.refundId":
-          refund.refundId,
-
-        "bookings.$.refundAmount":
-          refund.refundAmount,
-
-        "bookings.$.refundInitiatedAt":
-          refund.refundInitiatedAt || null,
-
-        "bookings.$.refundExpectedDays":
-          refund.refundExpectedDays || null,
-      },
-    }
-  );
-}
-
-// --------------------------------------------------
-// SAVE REFUND IN ALL COLLECTIONS
-// --------------------------------------------------
-
 async function persistRefundRecords({
   db,
   booking,
-  user,
   refund,
   now,
+  cancellationReason,
 }) {
-  // Do not create refund history for unpaid bookings.
   if (
     refund.refundStatus === "not-applicable" ||
     !refund.refundId
@@ -614,30 +470,21 @@ async function persistRefundRecords({
     return;
   }
 
-  const refundsCollection =
-    db.collection("refunds");
-
+  const refundsCollection = db.collection("refunds");
   const paymentRecordCollection =
     db.collection("paymentRecord");
 
-  const usersCollection =
-    db.collection("users");
-
   const refundRecord = createRefundRecord({
     booking,
-    user,
     refund,
     now,
+    cancellationReason,
   });
 
-  // 1. REFUNDS COLLECTION
-  // One document per Razorpay refund ID.
   const { createdAt, ...refundFields } = refundRecord;
 
   await refundsCollection.updateOne(
-    {
-      refundId: refund.refundId,
-    },
+    { refundId: refund.refundId },
     {
       $set: {
         ...refundFields,
@@ -647,14 +494,10 @@ async function persistRefundRecords({
         createdAt,
       },
     },
-    {
-      upsert: true,
-    }
+    { upsert: true }
   );
 
-  // 2. PAYMENT RECORD COLLECTION
   const paymentId = getRazorpayPaymentId(booking);
-
   const paymentConditions = [];
 
   if (paymentId) {
@@ -679,44 +522,17 @@ async function persistRefundRecords({
         $set: {
           paymentStatus: "refunded",
           status: "refunded",
-
           refundStatus: refund.refundStatus,
           refundId: refund.refundId,
           refundAmount: refund.refundAmount,
-
           refundInitiatedAt:
             refund.refundInitiatedAt || now,
-
           refundExpectedDays:
             refund.refundExpectedDays || null,
-
           updatedAt: now,
         },
       }
     );
-  }
-
-  // 3. USERS COLLECTION
-  if (user?._id) {
-    await usersCollection.updateOne(
-      {
-        _id: user._id,
-      },
-      {
-        $addToSet: {
-          refunds: refundRecord,
-        },
-      }
-    );
-
-    // Update matching embedded booking, if it exists.
-    await updateEmbeddedBooking({
-      users: usersCollection,
-      user,
-      booking,
-      refund,
-      now,
-    });
   }
 }
 
@@ -724,20 +540,47 @@ async function persistRefundRecords({
 // SUCCESS RESPONSE
 // --------------------------------------------------
 
-function successResponse(bookingId, refund) {
-  const hasRefund =
-    refund.refundStatus !== "not-applicable";
+function successResponse(
+  bookingId,
+  refund,
+  cancellationInfo,
+  now
+) {
+  const hasRefund = Boolean(refund.refundId);
+
+  let message;
+
+  if (hasRefund) {
+    message =
+      "Booking cancelled and refund initiated successfully.";
+  } else if (
+    !cancellationInfo.cancelledWithinTwoHours
+  ) {
+    message =
+      "Booking cancelled successfully. It was cancelled after 2 hours, so no refund is applicable.";
+  } else {
+    message =
+      "Booking cancelled successfully. No refund was applicable.";
+  }
 
   return NextResponse.json({
     success: true,
-
-    message: hasRefund
-      ? "Booking cancelled and refund initiated successfully."
-      : "Booking cancelled successfully. No refund was applicable.",
-
+    message,
     bookingId,
     status: "cancelled",
-    cancelledAt: new Date(),
+    cancelledAt: now,
+
+    cancelledWithinTwoHours:
+      cancellationInfo.cancelledWithinTwoHours,
+
+    elapsedMinutes:
+      cancellationInfo.elapsedMinutes,
+
+    cancellationWindow:
+      cancellationInfo.cancellationWindow,
+
+    refundEligible:
+      cancellationInfo.refundEligible,
 
     refundStatus: refund.refundStatus,
     refundId: refund.refundId,
@@ -754,7 +597,7 @@ function successResponse(bookingId, refund) {
 }
 
 // --------------------------------------------------
-// DEDICATED BOOKINGS COLLECTION CANCELLATION
+// CANCEL BOOKING
 // --------------------------------------------------
 
 async function cancelDedicatedBooking({
@@ -762,7 +605,8 @@ async function cancelDedicatedBooking({
   bookings,
   booking,
   ownerClauses,
-  user,
+  cancelledBy,
+  cancellationReason,
   now,
 }) {
   const status = normalizeStatus(booking.status);
@@ -786,15 +630,16 @@ async function cancelDedicatedBooking({
     );
   }
 
-  if (!isWithinCancellationPeriod(createdAt, now)) {
-    return NextResponse.json(
-      {
-        success: false,
-        message:
-          "The 2-hour cancellation period has expired. Cancellation and refund are no longer available.",
-      },
-      { status: 403 }
+  let cancellationInfo;
+
+  try {
+    cancellationInfo = getCancellationInfo(
+      createdAt,
+      now,
+      cancelledBy
     );
+  } catch (error) {
+    return jsonError(error.message, 409);
   }
 
   const bookingId = String(
@@ -803,7 +648,6 @@ async function cancelDedicatedBooking({
     booking.bookingReference
   );
 
-  // Atomically claim the booking.
   const claim = await bookings.updateOne(
     {
       _id: booking._id,
@@ -831,22 +675,32 @@ async function cancelDedicatedBooking({
   let refund = null;
 
   try {
-    // Initiate refund through Razorpay.
-    refund = await initiateRazorpayRefund(
-      booking,
-      now
-    );
+    if (cancellationInfo.cancelledWithinTwoHours) {
+      refund = await initiateRazorpayRefund(
+        booking,
+        now,
+        cancellationReason
+      );
+    } else {
+      refund = {
+        refundStatus: "not-eligible",
+        refundId: null,
+        refundAmount: null,
+        paymentStatus:
+          booking.paymentStatus ||
+          booking.payment?.status ||
+          "unknown",
+      };
+    }
 
-    // Save refund details in refunds, paymentRecord and users.
     await persistRefundRecords({
       db,
       booking,
-      user,
       refund,
       now,
+      cancellationReason,
     });
 
-    // Finalize original booking.
     const result = await bookings.updateOne(
       {
         _id: booking._id,
@@ -855,12 +709,27 @@ async function cancelDedicatedBooking({
       {
         $set: {
           status: "cancelled",
+          cancelledBy,
+          cancellationReason,
           cancelledAt: now,
           updatedAt: now,
-          cancellationReason: CANCELLATION_REASON,
 
-          paymentStatus: refund.paymentStatus,
+          cancelledWithinTwoHours:
+            cancellationInfo.cancelledWithinTwoHours,
 
+          elapsedMinutes:
+            cancellationInfo.elapsedMinutes,
+
+          cancellationWindow:
+            cancellationInfo.cancellationWindow,
+
+          refundEligible:
+            cancellationInfo.refundEligible,
+
+          paymentStatus:
+            refund.refundStatus === "completed" || refund.refundStatus === "initiated" || refund.refundId
+              ? "refunded"
+              : refund.paymentStatus,
           refundStatus: refund.refundStatus,
           refundId: refund.refundId,
           refundAmount: refund.refundAmount,
@@ -871,6 +740,7 @@ async function cancelDedicatedBooking({
           refundExpectedDays:
             refund.refundExpectedDays || null,
         },
+
         $unset: {
           cancellationProcessingAt: "",
         },
@@ -891,11 +761,13 @@ async function cancelDedicatedBooking({
       );
     }
 
-    return successResponse(bookingId, refund);
+    return successResponse(
+      bookingId,
+      refund,
+      cancellationInfo,
+      now
+    );
   } catch (error) {
-    // If Razorpay has already returned a refund ID,
-    // DO NOT restore the original status.
-    // This prevents a second refund attempt.
     if (!refund?.refundId) {
       await bookings.updateOne(
         {
@@ -908,195 +780,6 @@ async function cancelDedicatedBooking({
           },
           $unset: {
             cancellationProcessingAt: "",
-          },
-        }
-      );
-    }
-
-    throw error;
-  }
-}
-
-// --------------------------------------------------
-// LEGACY USERS.BOOKINGS CANCELLATION
-// --------------------------------------------------
-
-async function cancelEmbeddedBooking({
-  db,
-  users,
-  user,
-  embeddedBooking,
-  bookingId,
-  now,
-}) {
-  const status = normalizeStatus(
-    embeddedBooking.status
-  );
-
-  if (
-    BLOCKED_STATUSES.includes(status) ||
-    !isCancellable(status)
-  ) {
-    return jsonError(
-      "This booking can no longer be cancelled.",
-      409
-    );
-  }
-
-  const createdAt = getCreatedAt(embeddedBooking);
-
-  if (!createdAt) {
-    return jsonError(
-      "Booking creation time is missing or invalid.",
-      409
-    );
-  }
-
-  if (!isWithinCancellationPeriod(createdAt, now)) {
-    return NextResponse.json(
-      {
-        success: false,
-        message:
-          "The 2-hour cancellation period has expired. Cancellation and refund are no longer available.",
-      },
-      { status: 403 }
-    );
-  }
-
-  const identifierClauses =
-    getIdentifierQuery(bookingId);
-
-  const elementMatch = {
-    $and: [
-      { $or: identifierClauses },
-      { status: embeddedBooking.status },
-      { createdAt: embeddedBooking.createdAt },
-    ],
-  };
-
-  // Claim the embedded booking.
-  const claim = await users.updateOne(
-    {
-      _id: user._id,
-      bookings: {
-        $elemMatch: elementMatch,
-      },
-    },
-    {
-      $set: {
-        "bookings.$.status":
-          "cancellation-processing",
-
-        "bookings.$.cancellationProcessingAt": now,
-      },
-    }
-  );
-
-  if (claim.modifiedCount !== 1) {
-    return jsonError(
-      "This booking is already being processed or has changed.",
-      409
-    );
-  }
-
-  let refund = null;
-
-  try {
-    refund = await initiateRazorpayRefund(
-      embeddedBooking,
-      now
-    );
-
-    // Save the refund in the other collections too.
-    await persistRefundRecords({
-      db,
-      booking: embeddedBooking,
-      user,
-      refund,
-      now,
-    });
-
-    // Finalize embedded booking.
-    const result = await users.updateOne(
-      {
-        _id: user._id,
-        bookings: {
-          $elemMatch: {
-            $and: [
-              { $or: identifierClauses },
-              { status: "cancellation-processing" },
-            ],
-          },
-        },
-      },
-      {
-        $set: {
-          "bookings.$.status": "cancelled",
-          "bookings.$.cancelledAt": now,
-          "bookings.$.updatedAt": now,
-
-          "bookings.$.cancellationReason":
-            CANCELLATION_REASON,
-
-          "bookings.$.paymentStatus":
-            refund.paymentStatus,
-
-          "bookings.$.refundStatus":
-            refund.refundStatus,
-
-          "bookings.$.refundId":
-            refund.refundId,
-
-          "bookings.$.refundAmount":
-            refund.refundAmount,
-
-          "bookings.$.refundInitiatedAt":
-            refund.refundInitiatedAt || null,
-
-          "bookings.$.refundExpectedDays":
-            refund.refundExpectedDays || null,
-        },
-        $unset: {
-          "bookings.$.cancellationProcessingAt": "",
-        },
-      }
-    );
-
-    if (result.modifiedCount !== 1) {
-      console.error(
-        "Embedded booking finalization failed:",
-        bookingId,
-        refund.refundId
-      );
-
-      return jsonError(
-        "Refund was initiated, but booking status could not be updated. Please contact support.",
-        500
-      );
-    }
-
-    return successResponse(bookingId, refund);
-  } catch (error) {
-    if (!refund?.refundId) {
-      await users.updateOne(
-        {
-          _id: user._id,
-          bookings: {
-            $elemMatch: {
-              $and: [
-                { $or: identifierClauses },
-                { status: "cancellation-processing" },
-              ],
-            },
-          },
-        },
-        {
-          $set: {
-            "bookings.$.status":
-              embeddedBooking.status,
-          },
-          $unset: {
-            "bookings.$.cancellationProcessingAt": "",
           },
         }
       );
@@ -1158,15 +841,18 @@ export async function POST(request) {
       );
     }
 
+    const cancelledBy = String(body.cancelledBy || "patient")
+      .trim()
+      .toLowerCase();
+
+    const cancellationReason = String(
+      body.cancellationReason ||
+        (cancelledBy === "doctor" ? "Cancelled by doctor" : "Cancelled by patient")
+    ).trim();
+
     const ownerClauses = buildUserQuery(token);
 
-    const userDocumentClauses =
-      buildUserDocumentQuery(token);
-
-    if (
-      !ownerClauses.length ||
-      !userDocumentClauses.length
-    ) {
+    if (!ownerClauses.length) {
       return jsonError(
         "Unable to identify your account.",
         400
@@ -1175,20 +861,8 @@ export async function POST(request) {
 
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
-
     const bookings = db.collection("bookings");
-    const users = db.collection("users");
-
     const now = new Date();
-
-    // Find the logged-in user's document.
-    const user = await users.findOne({
-      $or: userDocumentClauses,
-    });
-
-    // ------------------------------------------------
-    // FIRST: CHECK DEDICATED BOOKINGS COLLECTION
-    // ------------------------------------------------
 
     const booking = await bookings.findOne({
       $and: [
@@ -1197,54 +871,22 @@ export async function POST(request) {
       ],
     });
 
-    if (booking) {
-      return await cancelDedicatedBooking({
-        db,
-        bookings,
-        booking,
-        ownerClauses,
-        user,
-        now,
-      });
-    }
-
-    // ------------------------------------------------
-    // SECOND: CHECK USERS.BOOKINGS
-    // ------------------------------------------------
-
-    if (user && Array.isArray(user.bookings)) {
-      const embeddedBooking = user.bookings.find(
-        (item) => {
-          if (
-            !item ||
-            typeof item !== "object" ||
-            Array.isArray(item)
-          ) {
-            return false;
-          }
-
-          return getBookingIdentifiers(item).includes(
-            bookingId
-          );
-        }
+    if (!booking) {
+      return jsonError(
+        "Booking not found in the bookings collection, or you do not have permission to cancel it.",
+        404
       );
-
-      if (embeddedBooking) {
-        return await cancelEmbeddedBooking({
-          db,
-          users,
-          user,
-          embeddedBooking,
-          bookingId,
-          now,
-        });
-      }
     }
 
-    return jsonError(
-      "Booking not found or you do not have permission to cancel it.",
-      404
-    );
+    return await cancelDedicatedBooking({
+      db,
+      bookings,
+      booking,
+      ownerClauses,
+      cancelledBy,
+      cancellationReason,
+      now,
+    });
   } catch (error) {
     console.error(
       "POST /api/my-bookings/cancel error:",
