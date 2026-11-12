@@ -2,14 +2,15 @@
 import "./globals.css";
 import { Toaster } from "react-hot-toast";
 import Providers from "./Providers";
+ 
 
 export const metadata = {
   title: "ZERIY | Made Simpler And Much Faster",
   description: "Made Simpler & Much Faster",
   icons: {
-    icon: "/logo.png",
-    shortcut: "/logo.png",
-    apple: "/logo.png",
+    icon: "/icon.png",
+    shortcut: "/icon.png",
+    apple: "/icon.png",
   },
 };
 
@@ -29,8 +30,11 @@ export default function RootLayout({ children }) {
         />
 
         <Providers>
+        
           {children}
+         
         </Providers>
+
       </body>
     </html>
   );

@@ -61,6 +61,211 @@ function getDoctorId(doctor) {
   return String(value);
 }
 
+function getIndiaDateString() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const values = Object.fromEntries(
+    parts.map(({ type, value }) => [type, value])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function getIndiaMinutes() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+
+  const hour = Number(
+    parts.find((p) => p.type === "hour")?.value
+  );
+
+  const minute = Number(
+    parts.find((p) => p.type === "minute")?.value
+  );
+
+  return hour * 60 + minute;
+}
+
+function getIndiaDayName() {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    weekday: "long",
+  }).format(new Date());
+}
+
+function parseTimeMinutes(value) {
+  if (!value) return null;
+
+  const match = String(value)
+    .trim()
+    .match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+
+  if (!match) return null;
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const period = match[3]?.toUpperCase();
+
+  if (minute > 59) return null;
+
+  if (period) {
+    if (hour < 1 || hour > 12) return null;
+
+    hour = hour % 12;
+
+    if (period === "PM") hour += 12;
+  } else if (hour > 23) {
+    return null;
+  }
+
+  return hour * 60 + minute;
+}
+
+function formatTime(value) {
+  const minutes = parseTimeMinutes(value);
+
+  if (minutes === null) return value || "";
+
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+
+  return `${String(hour % 12 || 12).padStart(2, "0")}:${String(
+    minute
+  ).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`;
+}
+
+function getCurrentActiveSlot(
+  doctor,
+  currentMinutes = getIndiaMinutes()
+) {
+  if (!doctor) return null;
+
+  if (
+    doctor.isOnHolidayToday === true ||
+    doctor.isClosed === true ||
+    doctor.isSessionActive !== true
+  ) {
+    return null;
+  }
+
+  const dayName = getIndiaDayName();
+
+  const schedule =
+    doctor.schedule?.[dayName] ??
+    doctor.schedule?.[dayName.toLowerCase()] ??
+    null;
+
+  if (
+    !schedule ||
+    schedule.active === false ||
+    schedule.isActive === false
+  ) {
+    return null;
+  }
+
+  const activeSession = doctor.activeSession;
+
+  if (
+    !activeSession ||
+    activeSession.status === "closed" ||
+    activeSession.status === "cancelled" ||
+    activeSession.cancelled === true
+  ) {
+    return null;
+  }
+
+  const scheduleSlots = Array.isArray(schedule)
+    ? schedule
+    : Array.isArray(schedule.sessions)
+      ? schedule.sessions
+      : Array.isArray(schedule.slots)
+        ? schedule.slots
+        : [];
+
+  const sessionId =
+    activeSession.sessionId ??
+    activeSession.id ??
+    activeSession._id ??
+    null;
+
+  const matchingSlots = scheduleSlots.filter((slot) => {
+    if (
+      !slot ||
+      slot.active === false ||
+      slot.isActive === false
+    ) {
+      return false;
+    }
+
+    if (
+      slot.cancelled === true ||
+      slot.status === "closed" ||
+      slot.status === "cancelled"
+    ) {
+      return false;
+    }
+
+    if (!sessionId) return true;
+
+    const slotId =
+      slot.sessionId ??
+      slot.id ??
+      slot._id ??
+      null;
+
+    return !slotId || String(slotId) === String(sessionId);
+  });
+
+  const candidates = [
+    activeSession,
+    ...matchingSlots,
+  ].filter(Boolean);
+
+  for (const slot of candidates) {
+    const open =
+      slot.open ??
+      slot.startTime ??
+      slot.from ??
+      slot.openTime ??
+      null;
+
+    const close =
+      slot.close ??
+      slot.endTime ??
+      slot.to ??
+      slot.closeTime ??
+      null;
+
+    const openMinutes = parseTimeMinutes(open);
+    const closeMinutes = parseTimeMinutes(close);
+
+    if (
+      openMinutes !== null &&
+      closeMinutes !== null &&
+      currentMinutes >= openMinutes &&
+      currentMinutes < closeMinutes
+    ) {
+      return {
+        open: formatTime(open),
+        close: formatTime(close),
+        rawOpen: open,
+        rawClose: close,
+      };
+    }
+  }
+
+  return null;
+}
+
 function loadRazorpayScript() {
   return new Promise((resolve) => {
     if (window.Razorpay) {
@@ -145,6 +350,18 @@ export default function ClinicBookingPage() {
   const [loadingClinic, setLoadingClinic] = useState(true);
   const [clinicError, setClinicError] = useState("");
 
+  const [indiaMinutes, setIndiaMinutes] = useState(
+    () => getIndiaMinutes()
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setIndiaMinutes(getIndiaMinutes());
+    }, 15000);
+
+    return () => clearInterval(timer);
+  }, []);
+
   // ------------------------------------------------
   // PROFILE
   // ------------------------------------------------
@@ -186,7 +403,6 @@ export default function ClinicBookingPage() {
         return;
       }
 
-      setLoadingClinic(true);
       setClinicError("");
 
       try {
@@ -226,8 +442,11 @@ export default function ClinicBookingPage() {
 
     fetchClinic();
 
+    const refreshTimer = setInterval(fetchClinic, 20000);
+
     return () => {
       cancelled = true;
+      clearInterval(refreshTimer);
     };
   }, [clinicId, doctorId]);
 
@@ -264,15 +483,15 @@ export default function ClinicBookingPage() {
 
         if (cancelled) return;
 
-        const profile = data.profile ?? data.user ?? data;
+        const profile =
+          data.profile ?? data.user ?? data;
 
-        setPatientName(
-          (current) =>
-            current ||
-            profile.name ||
-            profile.fullName ||
-            session?.user?.name ||
-            ""
+        setPatientName((current) =>
+          current ||
+          profile.name ||
+          profile.fullName ||
+          session?.user?.name ||
+          ""
         );
 
         if (
@@ -291,19 +510,18 @@ export default function ClinicBookingPage() {
 
         if (profile.phone || profile.mobile) {
           setPhone((current) =>
-            current || String(profile.phone || profile.mobile)
+            current ||
+            String(profile.phone || profile.mobile)
           );
         }
       } catch {
         if (!cancelled) {
-          setPatientName(
-            (current) =>
-              current || session?.user?.name || ""
+          setPatientName((current) =>
+            current || session?.user?.name || ""
           );
 
-          setPhone(
-            (current) =>
-              current || session?.user?.phone || ""
+          setPhone((current) =>
+            current || session?.user?.phone || ""
           );
         }
       } finally {
@@ -333,12 +551,23 @@ export default function ClinicBookingPage() {
 
   const normalizedDoctorId = getDoctorId(doctor);
 
+  const appointmentDate = getIndiaDateString();
+
+  const activeSlot = getCurrentActiveSlot(
+    doctor,
+    indiaMinutes
+  );
+
+  const isEmergencySlotAvailable = Boolean(activeSlot);
+
   // ------------------------------------------------
   // BOOKING CHARGE
   // ------------------------------------------------
 
   const bookingCharge = Number(
-    doctor?.emergencyBookingCharge ?? doctor?.bookingCharge ?? 0
+    doctor?.emergencyBookingCharge ??
+    doctor?.bookingCharge ??
+    0
   );
 
   const isPageLoading =
@@ -394,12 +623,21 @@ export default function ClinicBookingPage() {
     }
 
     if (!/^[6-9]\d{9}$/.test(phone)) {
-      setError("Please enter a valid 10-digit phone number.");
+      setError(
+        "Please enter a valid 10-digit phone number."
+      );
       return false;
     }
 
     if (!gender) {
       setError("Please select the patient's gender.");
+      return false;
+    }
+
+    if (!isEmergencySlotAvailable || !activeSlot) {
+      setError(
+        "The doctor does not have an active session right now. Please try again during an open session."
+      );
       return false;
     }
 
@@ -439,8 +677,60 @@ export default function ClinicBookingPage() {
     setError("");
 
     try {
-      // Create emergency payment order.
-      // No appointment date or time slot is selected here.
+      const normalizedClinicId = String(clinicId);
+      const normalizedPatientName = patientName.trim();
+      const normalizedPatientPhone = phone.trim();
+      const numericAge = Number(age);
+      const numericArrivalTime = Number(arrivalTime);
+
+      // Patient account = self.
+      // Doctor/staff account = booking for another patient.
+      const creatorRole = String(
+        session?.user?.role || "patient"
+      ).toLowerCase();
+
+      const patientType = [
+        "doctor",
+        "staff",
+      ].includes(creatorRole)
+        ? "other"
+        : "self";
+
+      // ----------------------------------------------
+      // 1. CREATE PAYMENT ORDER
+      // ----------------------------------------------
+
+      const orderPayload = {
+        category,
+
+        clinicId: normalizedClinicId,
+        doctorId: normalizedDoctorId,
+
+        // Patient details.
+        patientName: normalizedPatientName,
+        patientPhone: normalizedPatientPhone,
+        patientType,
+        age: numericAge,
+        gender,
+
+        // Emergency booking information.
+        isEmergency: true,
+        priority: "emergency",
+        bookingType: "emergency",
+
+        // Appointment details.
+        date: appointmentDate,
+        time: activeSlot.rawOpen,
+
+        slot: {
+          open: activeSlot.rawOpen,
+          close: activeSlot.rawClose,
+        },
+
+        // Numeric minutes.
+        arrivalTime: numericArrivalTime,
+      };
+
       const orderResponse = await fetch(
         "/api/payment/create-order",
         {
@@ -448,46 +738,34 @@ export default function ClinicBookingPage() {
           headers: {
             "Content-Type": "application/json",
           },
-
-          body: JSON.stringify({
-            category,
-
-            clinicId: String(clinicId),
-            doctorId: normalizedDoctorId,
-
-            patientName: patientName.trim(),
-            age: Number(age),
-            phone,
-            gender,
-
-            isEmergency: true,
-            priority: "emergency",
-            bookingType: "emergency",
-
-            arrivalTime: Number(arrivalTime),
-          }),
+          body: JSON.stringify(orderPayload),
         }
       );
 
       const orderData = await orderResponse.json();
 
-      if (
-        !orderResponse.ok ||
-        orderData.success === false
-      ) {
+      if (!orderResponse.ok || !orderData.success) {
         throw new Error(
           orderData.message ||
             "Failed to create payment order."
         );
       }
 
-      if (!orderData.orderId || !orderData.key) {
+      if (
+        !orderData.orderId ||
+        !orderData.key ||
+        !orderData.reference ||
+        !orderData.amount
+      ) {
         throw new Error(
           "Invalid payment order response from server."
         );
       }
 
-      // Load Razorpay.
+      // ----------------------------------------------
+      // 2. LOAD RAZORPAY
+      // ----------------------------------------------
+
       const scriptLoaded = await loadRazorpayScript();
 
       if (!scriptLoaded || !window.Razorpay) {
@@ -496,7 +774,10 @@ export default function ClinicBookingPage() {
         );
       }
 
-      // Open Razorpay checkout.
+      // ----------------------------------------------
+      // 3. OPEN RAZORPAY CHECKOUT
+      // ----------------------------------------------
+
       const checkout = new window.Razorpay({
         key: orderData.key,
 
@@ -504,32 +785,33 @@ export default function ClinicBookingPage() {
 
         currency: orderData.currency || "INR",
 
-        name: "Zeric",
+        name: "Zeriy",
 
-        description: `Emergency Consultation - ${doctor.name}`,
+        description: `Emergency Appointment - ${
+          doctor.name ||
+          doctor.fullName ||
+          "Doctor"
+        }`,
 
         order_id: orderData.orderId,
 
         prefill: {
-          name: patientName.trim(),
+          name: normalizedPatientName,
           email: session?.user?.email || "",
-          contact: phone,
+          contact: normalizedPatientPhone,
         },
 
         notes: {
-          clinicId: String(clinicId),
+          reference: orderData.reference,
+          clinicId: normalizedClinicId,
           doctorId: normalizedDoctorId,
           category,
-
-          isEmergency: "true",
+          appointmentDate,
+          patientName: normalizedPatientName,
+          patientPhone: normalizedPatientPhone,
           priority: "emergency",
-
-          patientName: patientName.trim(),
-          age: String(age),
-          phone,
-          gender,
-
-          arrivalTime: `${arrivalTime} minutes`,
+          bookingType: "emergency",
+          arrivalTime: `${numericArrivalTime} minutes`,
         },
 
         theme: {
@@ -542,18 +824,31 @@ export default function ClinicBookingPage() {
           },
         },
 
+        // --------------------------------------------
+        // 4. VERIFY PAYMENT
+        // --------------------------------------------
+
         handler: async (paymentResponse) => {
           try {
+            const verifyPayload = {
+              razorpay_order_id:
+                paymentResponse.razorpay_order_id,
+
+              razorpay_payment_id:
+                paymentResponse.razorpay_payment_id,
+
+              razorpay_signature:
+                paymentResponse.razorpay_signature,
+            };
+
             const verifyResponse = await fetch(
               "/api/payment/verify",
               {
                 method: "POST",
-
                 headers: {
                   "Content-Type": "application/json",
                 },
-
-                body: JSON.stringify(paymentResponse),
+                body: JSON.stringify(verifyPayload),
               }
             );
 
@@ -565,17 +860,26 @@ export default function ClinicBookingPage() {
             ) {
               setError(
                 verifyData.message ||
-                  "Payment verification failed."
+                  "Payment verification failed. Please check My Bookings."
               );
 
               setIsPaying(false);
               return;
             }
 
-            router.push("/my-bookings");
-          } catch {
+            // ----------------------------------------
+            // 5. SUCCESS
+            // ----------------------------------------
+
+            router.replace("/my-bookings");
+          } catch (verifyError) {
+            console.error(
+              "Payment verification error:",
+              verifyError
+            );
+
             setError(
-              "Payment verification failed. Please check My Bookings."
+              "Payment may have been captured. Please check My Bookings before trying again."
             );
 
             setIsPaying(false);
@@ -583,7 +887,16 @@ export default function ClinicBookingPage() {
         },
       });
 
+      // ----------------------------------------------
+      // 6. PAYMENT FAILURE
+      // ----------------------------------------------
+
       checkout.on("payment.failed", (response) => {
+        console.error(
+          "Razorpay payment failed:",
+          response?.error
+        );
+
         setError(
           response?.error?.description ||
             "Payment failed. Please try again."
@@ -594,6 +907,8 @@ export default function ClinicBookingPage() {
 
       checkout.open();
     } catch (err) {
+      console.error("Emergency payment error:", err);
+
       setError(
         err.message || "Something went wrong."
       );
@@ -679,9 +994,6 @@ export default function ClinicBookingPage() {
       <Header showBack={false} />
 
       <section className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8">
-
-        {/* BACK BUTTON */}
-
         <button
           type="button"
           onClick={() => router.back()}
@@ -692,7 +1004,6 @@ export default function ClinicBookingPage() {
         </button>
 
         <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-xl shadow-slate-200/40">
-
           {/* HEADER */}
 
           <div className="border-b border-slate-100 bg-gradient-to-r from-rose-50/80 via-white to-white p-6 sm:p-8">
@@ -721,7 +1032,6 @@ export default function ClinicBookingPage() {
           </div>
 
           <div className="space-y-7 p-6 sm:p-8">
-
             {/* EMERGENCY NOTICE */}
 
             <div className="flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50/70 p-4">
@@ -734,8 +1044,8 @@ export default function ClinicBookingPage() {
 
                 <p className="mt-1 text-xs leading-relaxed text-rose-700">
                   Enter the patient's details and estimated
-                  travel time. No appointment date or time-slot
-                  selection is required.
+                  travel time. Today's currently active doctor
+                  session will be assigned automatically.
                 </p>
               </div>
             </div>
@@ -751,7 +1061,7 @@ export default function ClinicBookingPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
                     <h2 className="text-base font-bold text-slate-900 sm:text-lg">
-                      {doctor.name}
+                      {doctor.name || doctor.fullName}
                     </h2>
 
                     <span className="text-xs font-medium text-slate-500">
@@ -782,13 +1092,49 @@ export default function ClinicBookingPage() {
                   <div className="mt-4 flex flex-wrap items-center gap-2">
                     <span className="inline-flex items-center gap-1 rounded-lg border border-slate-200/60 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600">
                       <Clock className="h-3 w-3 text-indigo-500" />
-                      {doctor.duration || 30} mins
+                      {doctor.duration || doctor.checkupDuration || 30} mins
                     </span>
 
                     <span className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700">
                       <Zap className="h-3 w-3" />
                       Emergency
                     </span>
+                  </div>
+
+                  <div
+                    className={`mt-4 rounded-xl border px-3.5 py-3 ${
+                      isEmergencySlotAvailable
+                        ? "border-emerald-200 bg-emerald-50"
+                        : "border-amber-200 bg-amber-50"
+                    }`}
+                  >
+                    <p
+                      className={`text-xs font-bold ${
+                        isEmergencySlotAvailable
+                          ? "text-emerald-800"
+                          : "text-amber-800"
+                      }`}
+                    >
+                      {isEmergencySlotAvailable
+                        ? "Currently active session"
+                        : "No active session right now"}
+                    </p>
+
+                    <p
+                      className={`mt-1 text-xs ${
+                        isEmergencySlotAvailable
+                          ? "text-emerald-700"
+                          : "text-amber-700"
+                      }`}
+                    >
+                      {isEmergencySlotAvailable
+                        ? `${appointmentDate} • ${activeSlot.open} – ${activeSlot.close}`
+                        : doctor.isOnHolidayToday
+                          ? "The doctor is on holiday today."
+                          : doctor.isClosed
+                            ? "The doctor's session is closed."
+                            : "Emergency booking is available only during an active session."}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -797,7 +1143,6 @@ export default function ClinicBookingPage() {
             {/* PATIENT DETAILS */}
 
             <div className="space-y-5">
-
               <div>
                 <h3 className="text-sm font-bold uppercase tracking-tight text-slate-400">
                   1. Patient Details
@@ -822,7 +1167,9 @@ export default function ClinicBookingPage() {
                   <input
                     type="text"
                     value={patientName}
-                    onChange={(e) => setPatientName(e.target.value)}
+                    onChange={(e) =>
+                      setPatientName(e.target.value)
+                    }
                     placeholder="Enter patient name"
                     autoComplete="name"
                     className="w-full rounded-xl border border-gray-200 bg-white py-3 pl-11 pr-4 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
@@ -865,7 +1212,9 @@ export default function ClinicBookingPage() {
                       value={phone}
                       onChange={(e) =>
                         setPhone(
-                          e.target.value.replace(/\D/g, "").slice(0, 10)
+                          e.target.value
+                            .replace(/\D/g, "")
+                            .slice(0, 10)
                         )
                       }
                       placeholder="10-digit mobile number"
@@ -892,7 +1241,8 @@ export default function ClinicBookingPage() {
                         setError("");
                       }}
                       className={`rounded-xl border px-3 py-3 text-sm font-semibold transition ${
-                        gender.toLowerCase() === item.toLowerCase()
+                        gender.toLowerCase() ===
+                        item.toLowerCase()
                           ? "border-indigo-600 bg-indigo-50 text-indigo-700"
                           : "border-gray-200 bg-white text-gray-600 hover:border-indigo-300"
                       }`}
@@ -1049,6 +1399,7 @@ export default function ClinicBookingPage() {
                 !clinic ||
                 !doctor ||
                 !normalizedDoctorId ||
+                !isEmergencySlotAvailable ||
                 !patientName.trim() ||
                 age === "" ||
                 !Number.isInteger(Number(age)) ||
@@ -1075,11 +1426,17 @@ export default function ClinicBookingPage() {
               )}
             </button>
 
+            {!isEmergencySlotAvailable && (
+              <p className="text-center text-xs font-medium text-amber-700">
+                Payment is disabled because the doctor has no active session
+                at the moment.
+              </p>
+            )}
+
             <p className="text-center text-[10px] leading-relaxed text-slate-400">
               Your emergency booking will be confirmed only
               after successful payment verification.
             </p>
-
           </div>
         </div>
       </section>

@@ -2,7 +2,6 @@
 "use client";
 
 import {
-  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -70,32 +69,26 @@ function getDoctorId(doctor) {
   return String(value);
 }
 
-function getDoctorDaySchedule(doctor, dayKey, dateValue) {
-  if (
-    dateValue &&
-    Array.isArray(doctor?.holidayDates) &&
-    doctor.holidayDates.some(
-      (date) => normalizeDate(date) === dateValue
-    )
-  ) {
-    return {
-      active: false,
-      slots: [],
-      isHoliday: true,
-    };
+function normalizeDate(value) {
+  if (!value) return "";
+
+  if (typeof value === "string") {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return value;
+    }
+
+    const parsed = new Date(value);
+
+    if (!Number.isNaN(parsed.getTime())) {
+      return getDateValue(parsed);
+    }
   }
 
-  const schedule = doctor?.schedule;
-
-  if (!schedule || typeof schedule !== "object") {
-    return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return getDateValue(value);
   }
 
-  const matchingKey = Object.keys(schedule).find(
-    (key) => key.toLowerCase() === dayKey.toLowerCase()
-  );
-
-  return matchingKey ? schedule[matchingKey] : null;
+  return "";
 }
 
 function getDateValue(date) {
@@ -111,15 +104,12 @@ function formatDate(dateString) {
 
   const [year, month, day] = dateString.split("-").map(Number);
 
-  return new Date(year, month - 1, day).toLocaleDateString(
-    "en-IN",
-    {
-      weekday: "long",
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    }
-  );
+  return new Date(year, month - 1, day).toLocaleDateString("en-IN", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 }
 
 function parseSlotMinutes(value) {
@@ -127,10 +117,9 @@ function parseSlotMinutes(value) {
     return null;
   }
 
-  const match =
-    /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i.exec(
-      String(value).trim()
-    );
+  const match = /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i.exec(
+    String(value).trim()
+  );
 
   if (!match) return null;
 
@@ -161,12 +150,7 @@ function formatTime(value) {
 
   const date = new Date(2000, 0, 1);
 
-  date.setHours(
-    Math.floor(minutes / 60),
-    minutes % 60,
-    0,
-    0
-  );
+  date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
 
   return date.toLocaleTimeString("en-IN", {
     hour: "numeric",
@@ -197,26 +181,32 @@ function getIndiaDateTime() {
   };
 }
 
-function normalizeDate(value) {
-  if (!value) return "";
-
-  if (typeof value === "string") {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-      return value;
-    }
-
-    const parsed = new Date(value);
-
-    if (!Number.isNaN(parsed.getTime())) {
-      return getDateValue(parsed);
-    }
+function getDoctorDaySchedule(doctor, dayKey, dateValue) {
+  if (
+    dateValue &&
+    Array.isArray(doctor?.holidayDates) &&
+    doctor.holidayDates.some(
+      (date) => normalizeDate(date) === dateValue
+    )
+  ) {
+    return {
+      active: false,
+      slots: [],
+      isHoliday: true,
+    };
   }
 
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return getDateValue(value);
+  const schedule = doctor?.schedule;
+
+  if (!schedule || typeof schedule !== "object") {
+    return null;
   }
 
-  return "";
+  const matchingKey = Object.keys(schedule).find(
+    (key) => key.toLowerCase() === dayKey.toLowerCase()
+  );
+
+  return matchingKey ? schedule[matchingKey] : null;
 }
 
 function getBookingSlot(booking) {
@@ -229,10 +219,7 @@ function getBookingSlot(booking) {
       booking?.time ??
       booking?.appointmentTime ??
       "",
-    close:
-      slot.close ??
-      booking?.slotClose ??
-      "",
+    close: slot.close ?? booking?.slotClose ?? "",
   };
 }
 
@@ -315,8 +302,8 @@ function getSlotCapacityInfo(
 
     const bookingDate = normalizeDate(
       booking.date ??
-      booking.appointmentDate ??
-      booking.bookingDate
+        booking.appointmentDate ??
+        booking.bookingDate
     );
 
     const bookingSlot = getBookingSlot(booking);
@@ -462,15 +449,6 @@ function loadRazorpayScript() {
   });
 }
 
-function extractBookings(data) {
-  if (Array.isArray(data?.bookings)) return data.bookings;
-  if (Array.isArray(data?.customers)) return data.customers;
-  if (Array.isArray(data?.data)) return data.data;
-  if (Array.isArray(data?.results)) return data.results;
-
-  return null;
-}
-
 export default function ClinicBookingPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -498,17 +476,23 @@ export default function ClinicBookingPage() {
   const [bookings, setBookings] = useState([]);
   const [loadingBookings, setLoadingBookings] = useState(false);
   const [bookingsError, setBookingsError] = useState("");
-  const [refreshingBookings, setRefreshingBookings] = useState(false);
   const [bookingRefreshKey, setBookingRefreshKey] = useState(0);
 
   const [patientName, setPatientName] = useState(
     session?.user?.name || ""
   );
 
+  const [phone, setPhone] = useState(
+    session?.user?.phone ||
+      session?.user?.mobile ||
+      ""
+  );
+
+  const [patientType, setPatientType] = useState("self");
+
   const [age, setAge] = useState("");
   const [gender, setGender] = useState("Male");
 
-  // Automatically initialize today's date using India timezone.
   const [appointmentDate, setAppointmentDate] = useState(
     () => getIndiaDateTime().date
   );
@@ -518,28 +502,91 @@ export default function ClinicBookingPage() {
   const [error, setError] = useState("");
   const [isPaying, setIsPaying] = useState(false);
 
-  // Update patient name when the session becomes available.
+  // Redirect unauthenticated users to login.
   useEffect(() => {
-    if (session?.user?.name) {
-      setPatientName((previous) =>
-        previous || session.user.name
-      );
+    if (status === "unauthenticated") {
+      router.replace("/login");
     }
-  }, [session?.user?.name]);
+  }, [status, router]);
 
-  // Load clinic and doctor details.
+  // Prefill profile information.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadProfile() {
+      try {
+        const response = await fetch("/api/profile", {
+          cache: "no-store",
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success || cancelled) {
+          return;
+        }
+
+        const profile =
+          data.profile || data.user || data;
+
+        if (cancelled) return;
+
+        setPatientName((previous) =>
+          previous ||
+          profile.name ||
+          profile.fullName ||
+          ""
+        );
+
+        setAge((previous) =>
+          previous !== ""
+            ? previous
+            : profile.age != null
+            ? String(profile.age)
+            : ""
+        );
+
+        setGender(
+          profile.gender || "Male"
+        );
+
+        setPhone((previous) =>
+          previous ||
+          profile.phone ||
+          profile.mobile ||
+          ""
+        );
+      } catch (err) {
+        console.error("Profile loading failed:", err);
+      }
+    }
+
+    if (status === "authenticated") {
+      loadProfile();
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [status]);
+
+  // Load clinic details.
   useEffect(() => {
     let cancelled = false;
 
     async function fetchClinic() {
-      if (!clinicId) return;
+      if (!clinicId) {
+        setLoadingClinic(false);
+        return;
+      }
 
       setLoadingClinic(true);
       setClinicError("");
 
       try {
         const url = doctorId
-          ? `/api/clinics/${clinicId}?doctor=${encodeURIComponent(doctorId)}`
+          ? `/api/clinics/${clinicId}?doctor=${encodeURIComponent(
+              doctorId
+            )}`
           : `/api/clinics/${clinicId}`;
 
         const response = await fetch(url, {
@@ -550,7 +597,8 @@ export default function ClinicBookingPage() {
 
         if (!response.ok || !data.success) {
           throw new Error(
-            data.message || "Failed to load clinic details."
+            data.message ||
+              "Failed to load clinic details."
           );
         }
 
@@ -560,7 +608,8 @@ export default function ClinicBookingPage() {
       } catch (err) {
         if (!cancelled) {
           setClinicError(
-            err.message || "Could not load clinic details."
+            err.message ||
+              "Could not load clinic details."
           );
         }
       } finally {
@@ -577,11 +626,11 @@ export default function ClinicBookingPage() {
     };
   }, [clinicId, doctorId]);
 
-  // Match doctor from clinic.doctors.
   const doctor = useMemo(
     () =>
       clinic?.doctors?.find(
-        (item) => getDoctorId(item) === String(doctorId)
+        (item) =>
+          getDoctorId(item) === String(doctorId)
       ) ??
       clinic?.doctors?.[0] ??
       null,
@@ -590,16 +639,22 @@ export default function ClinicBookingPage() {
 
   const normalizedDoctorId = getDoctorId(doctor);
 
-  // Generate the next 14 available dates.
+  // Initialize bookings from clinic payload.
+  useEffect(() => {
+    if (
+      doctor?.bookings &&
+      Array.isArray(doctor.bookings)
+    ) {
+      setBookings(doctor.bookings);
+    }
+  }, [doctor]);
+
   const availableDates = useMemo(
     () => (doctor ? getAvailableDates(doctor) : []),
     [doctor]
   );
 
-  // IMPORTANT:
-  // This effect must come AFTER availableDates is declared.
-  // Keep today's date if it is available.
-  // Otherwise automatically select the first working date.
+  // Select a valid date when the current date is unavailable.
   useEffect(() => {
     if (!availableDates.length) return;
 
@@ -636,11 +691,14 @@ export default function ClinicBookingPage() {
   const selectedDoctorSchedule = useMemo(() => {
     if (!doctor || !appointmentDate) return null;
 
-    const [year, month, day] = appointmentDate
-      .split("-")
-      .map(Number);
+    const [year, month, day] =
+      appointmentDate.split("-").map(Number);
 
-    const selectedDate = new Date(year, month - 1, day);
+    const selectedDate = new Date(
+      year,
+      month - 1,
+      day
+    );
 
     const dayKey = dayNames[selectedDate.getDay()];
 
@@ -651,9 +709,13 @@ export default function ClinicBookingPage() {
     );
   }, [doctor, appointmentDate]);
 
-  // Fetch bookings for the selected date.
+  // Fetch bookings for selected date.
   useEffect(() => {
-    if (!appointmentDate || !clinicId || !normalizedDoctorId) {
+    if (
+      !appointmentDate ||
+      !clinicId ||
+      !normalizedDoctorId
+    ) {
       setBookings([]);
       setBookingsError("");
       setLoadingBookings(false);
@@ -661,7 +723,6 @@ export default function ClinicBookingPage() {
     }
 
     let cancelled = false;
-
     const controller = new AbortController();
 
     async function loadBookings() {
@@ -688,15 +749,20 @@ export default function ClinicBookingPage() {
 
         if (!response.ok || data.success === false) {
           throw new Error(
-            data.message || "Failed to load bookings."
+            data.message ||
+              "Failed to load bookings."
           );
         }
 
-        const records = extractBookings(data);
+        const records = Array.isArray(data?.bookings)
+          ? data.bookings
+          : Array.isArray(data?.data)
+          ? data.data
+          : null;
 
         if (!records) {
           throw new Error(
-            "Invalid bookings API response: expected a bookings array."
+            "Invalid bookings response payload."
           );
         }
 
@@ -705,10 +771,13 @@ export default function ClinicBookingPage() {
           setBookingsError("");
         }
       } catch (err) {
-        if (!cancelled && err.name !== "AbortError") {
-          setBookings([]);
+        if (
+          !cancelled &&
+          err.name !== "AbortError"
+        ) {
           setBookingsError(
-            err.message || "Could not load appointment bookings."
+            err.message ||
+              "Could not load appointment bookings."
           );
         }
       } finally {
@@ -754,13 +823,15 @@ export default function ClinicBookingPage() {
         const slotStart = parseSlotMinutes(slot.open);
         const slotEnd = parseSlotMinutes(slot.close);
 
-        if (slotStart === null || slotEnd === null) {
+        if (
+          slotStart === null ||
+          slotEnd === null
+        ) {
           return false;
         }
 
         if (slotEnd <= slotStart) return false;
 
-        // Hide expired slots for today.
         if (!isToday) return true;
 
         return slotEnd > currentMinutes;
@@ -778,7 +849,9 @@ export default function ClinicBookingPage() {
           id: `${slot.open}-${slot.close}-${index}`,
           open: slot.open,
           close: slot.close,
-          label: `${formatTime(slot.open)} - ${formatTime(slot.close)}`,
+          label: `${formatTime(slot.open)} - ${formatTime(
+            slot.close
+          )}`,
           ...capacityInfo,
         };
       });
@@ -790,7 +863,6 @@ export default function ClinicBookingPage() {
     normalizedDoctorId,
   ]);
 
-  // Clear selected time if it is no longer bookable.
   useEffect(() => {
     if (!appointmentTime) return;
 
@@ -830,11 +902,14 @@ export default function ClinicBookingPage() {
     setError("");
   };
 
+  // Validate all patient and appointment details.
   const validateForm = () => {
     setError("");
 
     if (status !== "authenticated") {
-      setError("Please log in before booking an appointment.");
+      setError(
+        "Please log in before booking an appointment."
+      );
       return false;
     }
 
@@ -844,12 +919,26 @@ export default function ClinicBookingPage() {
     }
 
     if (!clinic || !doctor || !normalizedDoctorId) {
-      setError("Clinic or doctor details could not be found.");
+      setError(
+        "Clinic or doctor details could not be found."
+      );
       return false;
     }
 
     if (!patientName.trim()) {
       setError("Please enter the patient name.");
+      return false;
+    }
+
+    const normalizedPhone = String(phone || "").replace(
+      /\D/g,
+      ""
+    );
+
+    if (!/^[6-9]\d{9}$/.test(normalizedPhone)) {
+      setError(
+        "Please enter a valid 10-digit Indian mobile number."
+      );
       return false;
     }
 
@@ -865,12 +954,21 @@ export default function ClinicBookingPage() {
       numericAge < 0 ||
       numericAge > 120
     ) {
-      setError("Please enter a valid age between 0 and 120.");
+      setError(
+        "Please enter a valid age between 0 and 120."
+      );
       return false;
     }
 
     if (!gender) {
-      setError("Please select the patient's gender.");
+      setError(
+        "Please select the patient's gender."
+      );
+      return false;
+    }
+
+    if (!["self", "other"].includes(patientType)) {
+      setError("Please select who the booking is for.");
       return false;
     }
 
@@ -880,7 +978,9 @@ export default function ClinicBookingPage() {
     }
 
     if (selectedDoctorSchedule?.isHoliday) {
-      setError("The doctor is on holiday on the selected date.");
+      setError(
+        "The doctor is on holiday on the selected date."
+      );
       return false;
     }
 
@@ -896,7 +996,9 @@ export default function ClinicBookingPage() {
     }
 
     if (!appointmentTime) {
-      setError("Please select an appointment time.");
+      setError(
+        "Please select an appointment time."
+      );
       return false;
     }
 
@@ -920,11 +1022,9 @@ export default function ClinicBookingPage() {
 
     if (currentSlot.isFull) {
       setAppointmentTime("");
-
       setError(
         "This appointment slot is full. Please select another slot."
       );
-
       return false;
     }
 
@@ -932,31 +1032,31 @@ export default function ClinicBookingPage() {
       setError(
         "Patient availability could not be verified. Please refresh the booking counts and try again."
       );
-
       return false;
     }
 
-    if (!Number.isFinite(bookingCharge) || bookingCharge <= 0) {
+    if (
+      !Number.isFinite(bookingCharge) ||
+      bookingCharge <= 0
+    ) {
       setError(
         "The booking charge is not configured for this doctor."
       );
-
       return false;
     }
 
     return true;
   };
 
+  // Create order, open Razorpay, and verify payment.
   const handlePayment = async () => {
     if (isPaying || isPageLoading) return;
-
     if (!validateForm()) return;
 
     setIsPaying(true);
     setError("");
 
     try {
-      // Fetch the latest booking counts before payment.
       const query = new URLSearchParams({
         clinicId: String(clinicId),
         doctorId: normalizedDoctorId,
@@ -964,6 +1064,7 @@ export default function ClinicBookingPage() {
         category,
       });
 
+      // Recheck availability before creating the order.
       const bookingsResponse = await fetch(
         `/api/bookings?${query.toString()}`,
         {
@@ -975,7 +1076,9 @@ export default function ClinicBookingPage() {
         }
       );
 
-      const bookingsData = await bookingsResponse.json();
+      const bookingsData = await bookingsResponse
+        .json()
+        .catch(() => ({}));
 
       if (
         !bookingsResponse.ok ||
@@ -983,15 +1086,21 @@ export default function ClinicBookingPage() {
       ) {
         throw new Error(
           bookingsData.message ||
-          "Unable to verify current patient availability."
+            "Unable to verify current appointment availability."
         );
       }
 
-      const latestBookings = extractBookings(bookingsData);
+      const latestBookings = Array.isArray(
+        bookingsData?.bookings
+      )
+        ? bookingsData.bookings
+        : Array.isArray(bookingsData?.data)
+        ? bookingsData.data
+        : null;
 
       if (!latestBookings) {
         throw new Error(
-          "The bookings API did not return a valid bookings list."
+          "The bookings API returned an invalid response."
         );
       }
 
@@ -1003,7 +1112,7 @@ export default function ClinicBookingPage() {
 
       if (!slot) {
         throw new Error(
-          "This slot is no longer available. Please select another slot."
+          "This appointment slot is no longer available."
         );
       }
 
@@ -1015,7 +1124,10 @@ export default function ClinicBookingPage() {
         normalizedDoctorId
       );
 
-      if (!latestCapacity.configured || latestCapacity.isFull) {
+      if (
+        !latestCapacity.configured ||
+        latestCapacity.isFull
+      ) {
         setAppointmentTime("");
 
         throw new Error(
@@ -1043,6 +1155,17 @@ export default function ClinicBookingPage() {
         );
       }
 
+      const normalizedPhone = String(phone || "").replace(
+        /\D/g,
+        ""
+      );
+
+      if (!/^[6-9]\d{9}$/.test(normalizedPhone)) {
+        throw new Error(
+          "Please enter a valid 10-digit mobile number."
+        );
+      }
+
       // Create Razorpay order.
       const orderResponse = await fetch(
         "/api/payment/create-order",
@@ -1053,39 +1176,60 @@ export default function ClinicBookingPage() {
           },
           body: JSON.stringify({
             category,
+
             clinicId: String(clinicId),
             doctorId: normalizedDoctorId,
+
             patientName: patientName.trim(),
+            patientPhone: normalizedPhone,
+            phone: normalizedPhone,
+            patientType,
+
             age: Number(age),
             gender,
+
+            appointmentDate,
             date: appointmentDate,
-            time: appointmentTime,
+            time: slot.open,
+
             slot: {
               open: slot.open,
               close: slot.close,
             },
+
+            priority: "normal",
+            isEmergency: false,
+            bookingType: "appointment",
           }),
         }
       );
 
-      const orderData = await orderResponse.json();
+      const orderData = await orderResponse
+        .json()
+        .catch(() => ({}));
 
-      if (!orderResponse.ok || orderData.success === false) {
+      if (
+        !orderResponse.ok ||
+        orderData.success === false
+      ) {
         throw new Error(
-          orderData.message || "Failed to create payment order."
+          orderData.message ||
+            "Failed to create payment order."
         );
       }
 
       if (
         !orderData.key ||
         !orderData.orderId ||
-        !Number.isFinite(Number(orderData.amount))
+        !Number.isFinite(Number(orderData.amount)) ||
+        Number(orderData.amount) <= 0
       ) {
         throw new Error(
           "The payment API returned incomplete Razorpay order details."
         );
       }
 
+      // Load Razorpay checkout script.
       const scriptLoaded = await loadRazorpayScript();
 
       if (!scriptLoaded || !window.Razorpay) {
@@ -1098,14 +1242,21 @@ export default function ClinicBookingPage() {
         key: orderData.key,
         amount: orderData.amount,
         currency: orderData.currency || "INR",
-        name: "Zeric",
-        description: `Appointment booking - ${doctor.name}`,
+
+        name: "Zeriy",
+
+        description: `Appointment booking - ${
+          doctor.name ||
+          doctor.fullName ||
+          "Doctor"
+        }`,
 
         order_id: orderData.orderId,
 
         prefill: {
           name: patientName.trim(),
           email: session?.user?.email || "",
+          contact: normalizedPhone,
         },
 
         notes: {
@@ -1113,6 +1264,7 @@ export default function ClinicBookingPage() {
           doctorId: normalizedDoctorId,
           appointmentDate,
           category,
+          patientType,
         },
 
         theme: {
@@ -1138,22 +1290,32 @@ export default function ClinicBookingPage() {
               }
             );
 
-            const verifyData = await verifyResponse.json();
+            const verifyData = await verifyResponse
+              .json()
+              .catch(() => ({}));
 
-            if (!verifyResponse.ok || !verifyData.success) {
+            if (
+              !verifyResponse.ok ||
+              !verifyData.success
+            ) {
               setError(
                 verifyData.message ||
-                "Payment verification failed. Check My Bookings before trying again."
+                  "Payment verification failed. Please check My Bookings before attempting another payment."
               );
 
               setIsPaying(false);
               return;
             }
 
-            router.push("/my-bookings");
-          } catch {
+            router.replace("/my-bookings");
+          } catch (err) {
+            console.error(
+              "Payment verification error:",
+              err
+            );
+
             setError(
-              "Payment was submitted, but verification could not be confirmed. Check My Bookings before attempting another payment."
+              "Payment was submitted, but verification could not be confirmed. Please check My Bookings before attempting another payment."
             );
 
             setIsPaying(false);
@@ -1164,7 +1326,7 @@ export default function ClinicBookingPage() {
       checkout.on("payment.failed", (response) => {
         setError(
           response?.error?.description ||
-          "Payment failed. Please try again."
+            "Payment failed. Please try again."
         );
 
         setIsPaying(false);
@@ -1172,8 +1334,11 @@ export default function ClinicBookingPage() {
 
       checkout.open();
     } catch (err) {
+      console.error("Appointment payment error:", err);
+
       setError(
-        err.message || "Something went wrong. Please try again."
+        err.message ||
+          "Something went wrong. Please try again."
       );
 
       setIsPaying(false);
@@ -1222,7 +1387,11 @@ export default function ClinicBookingPage() {
               type="button"
               onClick={() =>
                 router.push(
-                  `/${category === "clinic" ? "clinics" : collectionName}/${clinicId}`
+                  `/${
+                    category === "clinic"
+                      ? "clinics"
+                      : collectionName
+                  }/${clinicId}`
                 )
               }
               className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-indigo-600"
@@ -1264,20 +1433,20 @@ export default function ClinicBookingPage() {
 
                 <p className="mt-1 text-xs text-gray-500">
                   Signed in as{" "}
-                  {session?.user?.email || session?.user?.name}
+                  {session?.user?.email ||
+                    session?.user?.name}
                 </p>
               </div>
             </div>
 
             <p className="mt-3 text-sm leading-6 text-gray-500">
-              Your account details are filled in automatically where
-              available. You can edit them if you are booking for
-              another person.
+              Your account details are filled in automatically
+              where available. You can edit them if you are
+              booking for another person.
             </p>
           </div>
 
           <div className="space-y-6 p-5 sm:p-7">
-
             {/* Doctor and clinic details */}
             <div className="rounded-2xl bg-indigo-50 p-4 sm:p-5">
               <div className="flex items-start gap-3">
@@ -1286,9 +1455,17 @@ export default function ClinicBookingPage() {
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-gray-800">
-                    {doctor.name}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-gray-800">
+                      {doctor.name || doctor.fullName}
+                    </p>
+
+                    {doctor.isSessionActive && (
+                      <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700">
+                        Live Session Active
+                      </span>
+                    )}
+                  </div>
 
                   <p className="mt-0.5 text-xs text-gray-500">
                     {doctor.specialization}
@@ -1323,7 +1500,8 @@ export default function ClinicBookingPage() {
                     </p>
 
                     <p className="mt-1 text-xl font-bold text-indigo-700">
-                      ₹{bookingCharge.toLocaleString("en-IN")}
+                      ₹
+                      {bookingCharge.toLocaleString("en-IN")}
                     </p>
 
                     <p className="mt-1 text-xs text-gray-400">
@@ -1367,6 +1545,37 @@ export default function ClinicBookingPage() {
                   className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
                 />
               </div>
+
+              <div>
+                <label
+                  htmlFor="phone"
+                  className="mb-2 block text-sm font-semibold text-gray-700"
+                >
+                  Patient Mobile Number
+                </label>
+
+                <input
+                  id="phone"
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
+                  value={phone}
+                  onChange={(event) => {
+                    setPhone(
+                      event.target.value
+                        .replace(/\D/g, "")
+                        .slice(0, 10)
+                    );
+
+                    setError("");
+                  }}
+                  placeholder="Enter 10-digit mobile number"
+                  autoComplete="tel"
+                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50"
+                />
+              </div>
+
+              
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
@@ -1445,8 +1654,8 @@ export default function ClinicBookingPage() {
                       {date.isHoliday
                         ? " — Doctor On Holiday"
                         : date.isClosed
-                          ? " — Not Available"
-                          : ""}
+                        ? " — Not Available"
+                        : ""}
                     </option>
                   ))}
                 </select>
@@ -1496,8 +1705,8 @@ export default function ClinicBookingPage() {
                               {!slot.configured
                                 ? "Capacity not configured"
                                 : slot.isFull
-                                  ? "Full"
-                                  : `${slot.remaining} seats left`}
+                                ? "Full"
+                                : `${slot.remaining} seats left`}
                             </p>
                           ))}
                         </div>
@@ -1610,8 +1819,8 @@ export default function ClinicBookingPage() {
                           disabled
                             ? "border-gray-200 bg-gray-100 text-gray-400 opacity-80"
                             : selected
-                              ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
-                              : "border-gray-200 bg-white text-gray-700 hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-700"
+                            ? "border-indigo-600 bg-indigo-600 text-white shadow-sm"
+                            : "border-gray-200 bg-white text-gray-700 hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-700"
                         }`}
                       >
                         <div className="flex items-center gap-2">
@@ -1647,15 +1856,15 @@ export default function ClinicBookingPage() {
                               !slot.configured || slot.isFull
                                 ? "bg-red-100 text-red-700"
                                 : slot.remaining <= 2
-                                  ? "bg-amber-100 text-amber-700"
-                                  : "bg-green-100 text-green-700"
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-green-100 text-green-700"
                             }`}
                           >
                             {!slot.configured
                               ? "Unavailable"
                               : slot.isFull
-                                ? "Full"
-                                : `${slot.remaining} left`}
+                              ? "Full"
+                              : `${slot.remaining} left`}
                           </span>
                         </div>
                       </button>
@@ -1685,7 +1894,8 @@ export default function ClinicBookingPage() {
                     </p>
 
                     <p className="mt-1 text-xs font-medium text-gray-500">
-                      Consultation duration: {doctor.duration || 30} minutes
+                      Consultation duration:{" "}
+                      {doctor.duration || 30} minutes
                     </p>
 
                     {!selectedSlot ? (
@@ -1715,15 +1925,15 @@ export default function ClinicBookingPage() {
                             selectedSlot.isFull
                               ? "bg-red-100 text-red-700"
                               : selectedSlot.remaining <= 2
-                                ? "bg-amber-100 text-amber-700"
-                                : "bg-green-100 text-green-700"
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-green-100 text-green-700"
                           }`}
                         >
                           {!selectedSlot.configured
                             ? "Unavailable"
                             : selectedSlot.isFull
-                              ? "Slot Full"
-                              : `${selectedSlot.remaining} seats left`}
+                            ? "Slot Full"
+                            : `${selectedSlot.remaining} seats left`}
                         </span>
                       </div>
                     )}
@@ -1756,6 +1966,9 @@ export default function ClinicBookingPage() {
                 !doctor ||
                 !normalizedDoctorId ||
                 !patientName.trim() ||
+                !/^[6-9]\d{9}$/.test(
+                  String(phone || "").replace(/\D/g, "")
+                ) ||
                 age === "" ||
                 !Number.isInteger(Number(age)) ||
                 Number(age) < 0 ||
@@ -1779,7 +1992,6 @@ export default function ClinicBookingPage() {
               ) : isSlotUnavailable ? (
                 <>
                   <Clock className="h-5 w-5" />
-
                   {!appointmentDate || !appointmentTime
                     ? "Select Appointment Slot"
                     : "Slot Full / Unavailable"}
@@ -1787,7 +1999,8 @@ export default function ClinicBookingPage() {
               ) : (
                 <>
                   <CheckCircle2 className="h-5 w-5" />
-                  Pay ₹{bookingCharge.toLocaleString("en-IN")} & Book
+                  Pay ₹
+                  {bookingCharge.toLocaleString("en-IN")} & Book
                 </>
               )}
             </button>

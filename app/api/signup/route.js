@@ -290,7 +290,7 @@ export async function POST(request) {
       otp: hashedOTP,
       otpExpiresAt,
       deleteAt,
-
+  role:"user",
       createdAt: new Date(),
     };
 

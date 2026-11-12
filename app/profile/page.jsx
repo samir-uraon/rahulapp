@@ -8,6 +8,7 @@ import toast from "react-hot-toast";
 import LocationPicker from "@/components/LocationPicker";
 import { useRouter } from "next/navigation";
 import LoadingScreen from "@/components/LoadingScreen";
+import EnableNotifications from "@/components/EnableNotifications";
 
 const STORAGE_KEY = "Zeriy-location";
 
@@ -25,7 +26,6 @@ export default function ProfilePage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
-
   // Load profile information from session
   useEffect(() => {
     if (!user) return;
@@ -216,6 +216,8 @@ export default function ProfilePage() {
     );
   }
 
+  
+
   return (
     <main className="min-h-screen bg-gray-50">
       {/* HEADER */}
@@ -278,16 +280,22 @@ export default function ProfilePage() {
                   </p>
                 </div>
               </div>
+<div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+  <EnableNotifications
+    webPushEnabled={user?.webPushEnabled === true}
+    updateSession={update}
+  />
 
-              {!editing && (
-                <button
-                  type="button"
-                  onClick={() => setEditing(true)}
-                  className="w-full rounded-xl bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-600 transition hover:bg-indigo-100 active:bg-indigo-200 sm:w-auto"
-                >
-                  Edit Profile
-                </button>
-              )}
+  {!editing && (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      className="w-full rounded-xl bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-600 transition hover:bg-indigo-100 active:bg-indigo-200 sm:w-auto"
+    >
+      Edit Profile
+    </button>
+  )}
+</div>
             </div>
           </div>
 

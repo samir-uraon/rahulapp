@@ -33,7 +33,9 @@ function normalizeId(value) {
 }
 
 function normalizeEmail(value) {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
+  return typeof value === "string"
+    ? value.trim().toLowerCase()
+    : "";
 }
 
 function getDoctorId(value) {
@@ -145,6 +147,23 @@ function priorityRank(priority) {
   if (value === "elderly") return 1;
 
   return 2;
+}
+
+function normalizePriority(paymentOrder) {
+  const priority = String(
+    paymentOrder?.priority || "normal"
+  )
+    .trim()
+    .toLowerCase();
+
+  const isEmergency =
+    paymentOrder?.isEmergency === true ||
+    priority === "emergency";
+
+  if (isEmergency) return "emergency";
+  if (priority === "elderly") return "elderly";
+
+  return "normal";
 }
 
 function sortQueue(items) {
@@ -261,6 +280,24 @@ async function findDoctor(team, doctorId) {
   });
 }
 
+function getCreatedBy(paymentOrder) {
+  const creator = paymentOrder?.createdBy || {};
+
+  return {
+    id: normalizeId(
+      creator.id ||
+      paymentOrder?.userId
+    ),
+    role: String(
+      creator.role || "patient"
+    ).trim().toLowerCase(),
+    name: String(creator.name || "").trim(),
+    email: normalizeEmail(
+      creator.email || paymentOrder?.userEmail
+    ),
+  };
+}
+
 async function savePaymentRecord(
   paymentRecords,
   {
@@ -269,6 +306,7 @@ async function savePaymentRecord(
     bookingReference,
     userId,
     userEmail,
+    createdBy,
     clinicId,
     doctorId,
     category,
@@ -288,6 +326,12 @@ async function savePaymentRecord(
         bookingReference,
         userId,
         userEmail,
+        createdBy: createdBy || {
+          id: userId,
+          role: "patient",
+          name: "",
+          email: userEmail,
+        },
         clinicId,
         doctorId,
         category,
@@ -355,7 +399,7 @@ export async function POST(request) {
       );
     }
 
-    // 1. Authenticate the user.
+    // 1. Authenticate the account that initiated payment.
     const token = await getToken({
       req: request,
       secret: authSecret,
@@ -463,14 +507,22 @@ export async function POST(request) {
       );
     }
 
-    // 5. Verify order ownership.
+    // 5. Validate ownership using the account that created the order.
+    // For older payment orders, fall back to userId/userEmail.
+    const createdBy = getCreatedBy(paymentOrder);
+
+    const ownerId = createdBy.id;
+    const ownerEmail = createdBy.email;
+
     const belongsById =
       Boolean(tokenUserId) &&
-      normalizeId(paymentOrder.userId) === tokenUserId;
+      Boolean(ownerId) &&
+      tokenUserId === ownerId;
 
     const belongsByEmail =
       Boolean(tokenEmail) &&
-      normalizeEmail(paymentOrder.userEmail) === tokenEmail;
+      Boolean(ownerEmail) &&
+      tokenEmail === ownerEmail;
 
     if (!belongsById && !belongsByEmail) {
       return jsonResponse(
@@ -482,9 +534,9 @@ export async function POST(request) {
       );
     }
 
-    const ownerId = normalizeId(paymentOrder.userId);
-    const ownerEmail = normalizeEmail(paymentOrder.userEmail);
-    const bookingReference = normalizeId(paymentOrder.reference);
+    const bookingReference = normalizeId(
+      paymentOrder.reference
+    );
 
     if (!bookingReference) {
       return jsonResponse(
@@ -522,7 +574,9 @@ export async function POST(request) {
 
     const category = String(
       paymentOrder.category || "clinic"
-    ).trim().toLowerCase();
+    )
+      .trim()
+      .toLowerCase();
 
     const collectionName =
       CATEGORY_COLLECTIONS[category] || "clinics";
@@ -541,7 +595,55 @@ export async function POST(request) {
 
     const now = new Date();
 
-    // 7. Idempotency: do not create a duplicate booking.
+    // 7. Read saved patient and appointment details.
+    const patient = paymentOrder.patient || {};
+
+    const appointment = paymentOrder.appointment || {};
+    const slot = appointment.slot || {};
+
+    const patientName = String(
+      patient.name ||
+      paymentOrder.patientName ||
+      ""
+    ).trim();
+
+    const patientPhone = String(
+      patient.phone ||
+      paymentOrder.patientPhone ||
+      paymentOrder.phone ||
+      ""
+    ).trim();
+
+    const patientType = String(
+      patient.type ||
+      paymentOrder.patientType ||
+      "self"
+    ).trim();
+
+    const patientAge =
+      patient.age ?? paymentOrder.age ?? null;
+
+    const patientGender = String(
+      patient.gender ||
+      paymentOrder.gender ||
+      ""
+    ).trim();
+
+    const priority = normalizePriority(paymentOrder);
+
+    const isEmergency =
+      priority === "emergency";
+
+    const bookingType = String(
+      paymentOrder.bookingType || "normal"
+    ).trim();
+
+    const arrivalTime =
+      appointment.arrivalTime ??
+      paymentOrder.arrivalTime ??
+      null;
+
+    // 8. Idempotency: do not create a duplicate booking.
     const existingBooking = await bookings.findOne({
       $or: [
         { bookingReference },
@@ -551,7 +653,10 @@ export async function POST(request) {
     });
 
     if (existingBooking) {
-      const existingOwnerId = normalizeId(existingBooking.userId);
+      const existingOwnerId = normalizeId(
+        existingBooking.userId
+      );
+
       const existingOwnerEmail = normalizeEmail(
         existingBooking.userEmail
       );
@@ -577,6 +682,7 @@ export async function POST(request) {
         bookingReference: existingBooking.bookingReference,
         userId: ownerId,
         userEmail: ownerEmail,
+        createdBy,
         clinicId: existingBooking.clinicId,
         doctorId: existingBooking.doctorId,
         category,
@@ -612,7 +718,7 @@ export async function POST(request) {
       });
     }
 
-    // 8. Acquire a verification lock for this payment order.
+    // 9. Acquire a verification lock for this payment order.
     const staleLockBefore = new Date(
       Date.now() - 2 * 60 * 1000
     );
@@ -654,7 +760,12 @@ export async function POST(request) {
 
       if (
         retryBooking &&
-        normalizeId(retryBooking.userId) === ownerId
+        (
+          (ownerId &&
+            normalizeId(retryBooking.userId) === ownerId) ||
+          (ownerEmail &&
+            normalizeEmail(retryBooking.userEmail) === ownerEmail)
+        )
       ) {
         return jsonResponse({
           success: true,
@@ -676,12 +787,9 @@ export async function POST(request) {
     lockedOrderId = paymentOrder._id;
     lockAcquired = true;
 
-    // 9. Read the saved appointment data.
+    // 10. Validate saved appointment details.
     const clinicId = normalizeId(paymentOrder.clinicId);
     const doctorId = normalizeId(paymentOrder.doctorId);
-    const patient = paymentOrder.patient || {};
-    const appointment = paymentOrder.appointment || {};
-    const slot = appointment.slot || {};
 
     if (
       !clinicId ||
@@ -689,7 +797,7 @@ export async function POST(request) {
       !isValidDateString(appointment.date) ||
       !slot.open ||
       !slot.close ||
-      !String(patient.name || "").trim()
+      !patientName
     ) {
       await releaseLock();
 
@@ -702,7 +810,7 @@ export async function POST(request) {
       );
     }
 
-    // 10. Find the clinic.
+    // 11. Find the clinic.
     const clinics = db.collection(collectionName);
     const clinic = await findClinic(clinics, clinicId);
 
@@ -718,7 +826,7 @@ export async function POST(request) {
       );
     }
 
-    // 11. Validate doctor membership in the clinic.
+    // 12. Validate doctor membership in the clinic.
     const clinicDoctorIds = Array.isArray(clinic.doctors)
       ? clinic.doctors.map(getDoctorId)
       : [];
@@ -736,7 +844,7 @@ export async function POST(request) {
       );
     }
 
-    // 12. Fetch doctor by MongoDB ObjectId.
+    // 13. Fetch doctor by MongoDB ObjectId.
     const doctor = await findDoctor(team, doctorId);
 
     if (!doctor) {
@@ -768,7 +876,7 @@ export async function POST(request) {
       );
     }
 
-    // 13. Validate the slot against the doctor's current schedule.
+    // 14. Validate the slot against the doctor's current schedule.
     const configuredSlot = getConfiguredSlot(
       doctor,
       appointment.date,
@@ -812,7 +920,7 @@ export async function POST(request) {
       );
     }
 
-    // 14. Load the active queue for this exact slot.
+    // 15. Load the active queue for this exact slot.
     const queueFilter = {
       clinicId,
       doctorId,
@@ -841,6 +949,7 @@ export async function POST(request) {
         bookingReference,
         userId: ownerId,
         userEmail: ownerEmail,
+        createdBy,
         clinicId,
         doctorId,
         category,
@@ -882,7 +991,7 @@ export async function POST(request) {
       );
     }
 
-    // 15. Generate the next queue token.
+    // 16. Generate the next queue token.
     const sequence =
       Math.max(
         0,
@@ -891,7 +1000,10 @@ export async function POST(request) {
 
     const bookingNow = new Date();
 
-    // IMPORTANT: expectedTurnAt is intentionally not calculated or stored.
+    // 17. Create booking.
+    // userId/userEmail identify the account that created the payment.
+    // patient contains the person receiving the appointment.
+    // expectedTurnAt is intentionally not calculated or stored.
     const booking = {
       bookingReference,
 
@@ -900,6 +1012,8 @@ export async function POST(request) {
 
       userId: ownerId,
       userEmail: ownerEmail,
+
+      createdBy,
 
       clinicId,
       clinicName: getClinicName(clinic),
@@ -912,7 +1026,7 @@ export async function POST(request) {
       doctorName: getDoctorName(doctor),
       duration,
 
-      serviceName: "Consultation",
+      serviceName: "General Consultation",
       date: appointment.date,
       time: appointment.time || configuredSlot.open,
 
@@ -932,17 +1046,23 @@ export async function POST(request) {
       },
 
       patient: {
-        name: String(patient.name).trim(),
-        phone: String(patient.phone || "").trim(),
-        type: patient.type || "self",
-        age: patient.age ?? null,
-        gender: patient.gender || "",
+        name: patientName,
+        phone: patientPhone,
+        type: patientType,
+        age: patientAge,
+        gender: patientGender,
       },
 
-      priority:
-        String(patient.type || "").toLowerCase() === "elderly"
-          ? "elderly"
-          : "normal",
+      // Keep patient details accessible to existing UI code.
+      patientName,
+      patientPhone,
+      patientAge,
+      patientGender,
+
+      priority,
+      isEmergency,
+      bookingType,
+      arrivalTime,
 
       status: "waiting",
       paymentStatus: "paid",
@@ -956,7 +1076,7 @@ export async function POST(request) {
       updatedAt: bookingNow,
     };
 
-    // 16. Insert the booking.
+    // 18. Insert booking.
     const bookingInsert = await bookings.insertOne(booking);
 
     const savedBooking = {
@@ -964,13 +1084,14 @@ export async function POST(request) {
       _id: bookingInsert.insertedId,
     };
 
-    // 17. Record the captured payment.
+    // 19. Record captured payment.
     await savePaymentRecord(paymentRecords, {
       paymentId,
       orderId,
       bookingReference,
       userId: ownerId,
       userEmail: ownerEmail,
+      createdBy,
       clinicId,
       doctorId,
       category,
@@ -981,7 +1102,7 @@ export async function POST(request) {
       now: bookingNow,
     });
 
-    // 18. Mark the order as paid.
+    // 20. Mark order as paid.
     await orders.updateOne(
       { _id: paymentOrder._id },
       {

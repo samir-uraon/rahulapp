@@ -272,7 +272,7 @@ Made simpler and Much faster            </p>
             </div>
 
             {/* Forgot Password */}
-            <div className="-mt-6 flex justify-end">
+            <div className="-mt-4 flex justify-end">
               <button
                 type="button"
                 onClick={() => {

@@ -49,7 +49,10 @@ export default function LocationPicker({
   onClose,
   onLocationSelected,
 }) {
-  const { update } = useSession();
+const { data: session, status, update } = useSession();
+
+const isAuthenticated =
+  status === "authenticated" && session?.user?.role=="user";
 
   const [location, setLocation] = useState("");
   const [originalLocation, setOriginalLocation] = useState("");
@@ -63,6 +66,7 @@ export default function LocationPicker({
   const mountedRef = useRef(false);
   const savingRef = useRef(false);
   const gpsRequestRef = useRef(false);
+  const nativeLocationRequestRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -76,76 +80,113 @@ export default function LocationPicker({
   // FETCH SAVED LOCATION
   // =====================================================
 
-  useEffect(() => {
-    if (!open) return;
 
-    let cancelled = false;
+useEffect(() => {
+  if (!open || status === "loading") return;
 
-    async function loadSavedLocation() {
-      try {
-        const response = await fetch("/api/profile", {
-          method: "GET",
-          cache: "no-store",
-        });
+  let cancelled = false;
 
-        if (!response.ok) {
-          throw new Error("Unable to fetch profile");
-        }
-
-        const result = await response.json();
-        if (cancelled) return;
-
-        const user = result.user || result.profile || {};
-
-        const saved = {
-          type: user.locationType || "search",
-          name: user.locationName || "",
-          address: user.address || "",
-          latitude: user.location?.latitude ?? null,
-          longitude: user.location?.longitude ?? null,
-          city: user.city || "",
-          state: user.state || "",
-          pinCode: user.pinCode || "",
-        };
-
-        if (saved.address) {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
-
-          setLocation(saved.address);
-          setOriginalLocation(saved.address);
-        } else {
-          const cached = getCachedLocation();
-
-          setLocation(cached?.address || "");
-          setOriginalLocation(cached?.address || "");
-        }
-
-        setSelectedLocation(null);
-      } catch (error) {
-        console.error("LOAD_PROFILE_LOCATION_ERROR:", error);
-
-        if (cancelled) return;
-
+  async function loadSavedLocation() {
+    try {
+      // Guest: use localStorage, don't call protected API.
+      if (!isAuthenticated) {
         const cached = getCachedLocation();
+
+        if (cancelled) return;
 
         setLocation(cached?.address || "");
         setOriginalLocation(cached?.address || "");
         setSelectedLocation(null);
+        return;
       }
+
+      const response = await fetch("/api/profile", {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      // Handle expired session without logging an error.
+      if (response.status === 401) {
+        const cached = getCachedLocation();
+
+        if (cancelled) return;
+
+        setLocation(cached?.address || "");
+        setOriginalLocation(cached?.address || "");
+        setSelectedLocation(null);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error("Unable to fetch profile");
+      }
+
+      const result = await response.json();
+
+      if (cancelled) return;
+
+      const user = result.user || result.profile || {};
+
+      const saved = {
+        type: user.locationType || "search",
+        name: user.locationName || "",
+        address: user.address || "",
+        latitude: user.location?.latitude ?? null,
+        longitude: user.location?.longitude ?? null,
+        city: user.city || "",
+        state: user.state || "",
+        pinCode: user.pinCode || "",
+      };
+
+      if (saved.address) {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(saved)
+        );
+
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+
+        setLocation(saved.address);
+        setOriginalLocation(saved.address);
+      } else {
+        const cached = getCachedLocation();
+
+        setLocation(cached?.address || "");
+        setOriginalLocation(cached?.address || "");
+      }
+
+      setSelectedLocation(null);
+    } catch (error) {
+      if (cancelled) return;
+
+      console.error("LOAD_PROFILE_LOCATION_ERROR:", error);
+
+      const cached = getCachedLocation();
+
+      setLocation(cached?.address || "");
+      setOriginalLocation(cached?.address || "");
+      setSelectedLocation(null);
     }
+  }
 
-    loadSavedLocation();
+  loadSavedLocation();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
+  return () => {
+    cancelled = true;
+  };
+}, [open, status, isAuthenticated]);
+
 
   // =====================================================
   // UPDATE NEXTAUTH SESSION
   // =====================================================
 
 const updateSessionLocation = async (data) => {
+  if (!isAuthenticated) return;
+
   try {
     await update({
       latitude: data.latitude ?? null,
@@ -385,96 +426,177 @@ async function reverseGeocode(latitude, longitude) {
 
 
   // =====================================================
-  // CURRENT GPS LOCATION
+  // REQUEST LOCATION FROM EXPO NATIVE APP
   // =====================================================
 
-  const getCurrentLocation = () => {
-    if (gpsRequestRef.current || savingRef.current) return;
-
-    if (!navigator.geolocation) {
-      toast.error("Geolocation is not supported by this browser.");
-      return;
+  const requestNativeMobileLocation = () => {
+    // This bridge exists only inside React Native WebView.
+    if (!window.ReactNativeWebView?.postMessage) {
+      return Promise.resolve({ available: false });
     }
+
+    const requestId = `${Date.now()}-${++nativeLocationRequestRef.current}`;
+
+    return new Promise((resolve) => {
+      let timeoutId;
+
+      const cleanup = () => {
+        window.removeEventListener("zeriy:native-location", handleLocation);
+        window.clearTimeout(timeoutId);
+      };
+
+      const handleLocation = (event) => {
+        const result = event.detail;
+
+        if (result?.requestId !== requestId) return;
+
+        cleanup();
+        resolve({ available: true, result });
+      };
+
+      window.addEventListener("zeriy:native-location", handleLocation);
+
+      timeoutId = window.setTimeout(() => {
+        cleanup();
+        resolve({
+          available: true,
+          result: {
+            success: false,
+            error: "Mobile location request timed out. Please try again.",
+          },
+        });
+      }, 25000);
+
+      try {
+        window.ReactNativeWebView.postMessage(
+          JSON.stringify({
+            type: "ZERIY_GET_CURRENT_LOCATION",
+            requestId,
+          })
+        );
+      } catch (error) {
+        cleanup();
+        resolve({
+          available: true,
+          result: {
+            success: false,
+            error: "Unable to communicate with the mobile app.",
+          },
+        });
+      }
+    });
+  };
+
+  // =====================================================
+  // CURRENT GPS LOCATION
+  // Native Expo GPS is preferred inside the mobile app.
+  // Browser GPS remains the fallback on desktop/mobile web.
+  // =====================================================
+
+  const getCurrentLocation = async () => {
+    if (gpsRequestRef.current || savingRef.current) return;
 
     gpsRequestRef.current = true;
     setLoading(true);
     setSuggestions([]);
     setSelectedLocation(null);
 
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        try {
-        
-const { latitude, longitude } = position.coords;
+    try {
+      let coords;
 
-// Always preserve GPS coordinates.
-let locationData = {
-  latitude,
-  longitude,
-  address: "",
-  city: "",
-  state: "",
-  pincode: "",
-  country: "",
-};
+      // 1. Request native GPS from Expo when running in WebView.
+      const nativeResponse = await requestNativeMobileLocation();
 
-const addressData = await reverseGeocode(
-  latitude,
-  longitude
-);
+      if (nativeResponse.available) {
+        const result = nativeResponse.result;
 
-if (addressData) {
-  locationData = {
-    ...locationData,
-    ...addressData,
-  };
-}
-
-// Save even if reverse geocoding fails.
-let saved=await saveLocation(locationData);
-
-
-          if (saved) {
-            toast.success("Current location saved successfully.");
-          }
-        } catch (error) {
-          console.error("CURRENT_LOCATION_ERROR:", error);
-          toast.error("Unable to get or save your current location.");
-        } finally {
-          gpsRequestRef.current = false;
-
-          if (mountedRef.current) {
-            setLoading(false);
-          }
-        }
-      },
-      (error) => {
-        gpsRequestRef.current = false;
-
-        if (mountedRef.current) {
-          setLoading(false);
+        if (!result?.success) {
+          throw new Error(result?.error || "Unable to get mobile location.");
         }
 
-        if (error.code === error.PERMISSION_DENIED) {
-          toast.error(
-            "Location permission denied. Allow location access in your browser."
+        const latitude = Number(result.latitude);
+        const longitude = Number(result.longitude);
+
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+          throw new Error("The mobile app returned invalid coordinates.");
+        }
+
+        coords = {
+          latitude,
+          longitude,
+          accuracy: result.accuracy ?? null,
+        };
+      } else {
+        // 2. Use browser geolocation outside the Expo WebView.
+        if (!navigator.geolocation) {
+          throw new Error("Geolocation is not supported by this browser.");
+        }
+
+        coords = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              resolve({
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+                accuracy: position.coords.accuracy ?? null,
+              });
+            },
+            (error) => {
+              if (error.code === error.PERMISSION_DENIED) {
+                reject(new Error("Location permission denied. Allow location access in your browser."));
+              } else if (error.code === error.POSITION_UNAVAILABLE) {
+                reject(new Error("Unable to detect your location. Check your device location settings."));
+              } else if (error.code === error.TIMEOUT) {
+                reject(new Error("Location request timed out. Please try again."));
+              } else {
+                reject(new Error("Unable to get your current location."));
+              }
+            },
+            {
+              enableHighAccuracy: true,
+              timeout: 20000,
+              maximumAge: 0,
+            }
           );
-        } else if (error.code === error.POSITION_UNAVAILABLE) {
-          toast.error(
-            "Unable to detect your location. Check your device location settings."
-          );
-        } else if (error.code === error.TIMEOUT) {
-          toast.error("Location request timed out. Please try again.");
-        } else {
-          toast.error("Unable to get your current location.");
-        }
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 20000,
-        maximumAge: 0,
+        });
       }
-    );
+
+      const { latitude, longitude, accuracy } = coords;
+
+      // 3. Reverse-geocode coordinates. GPS coordinates are retained
+      // even if the reverse-geocoding service is temporarily unavailable.
+      const addressData = await reverseGeocode(latitude, longitude);
+
+      const locationData = {
+        type: "gps",
+        name: addressData?.city || "Current location",
+        address:
+          addressData?.address ||
+          `Current location (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`,
+        latitude,
+        longitude,
+        city: addressData?.city || "",
+        state: addressData?.state || "",
+        pinCode: addressData?.pincode || "",
+        accuracy,
+      };
+
+      // 4. Save through the existing profile API and update local/session state.
+      const saved = await saveLocation(locationData);
+
+      if (saved) {
+        toast.success("Current location detected and saved successfully.");
+      }
+    } catch (error) {
+      console.error("CURRENT_LOCATION_ERROR:", error);
+      toast.error(error.message || "Unable to get or save your current location.");
+    } finally {
+      gpsRequestRef.current = false;
+
+      if (mountedRef.current) {
+        setLoading(false);
+      }
+    }
   };
 
   // =====================================================
@@ -635,7 +757,7 @@ let saved=await saveLocation(locationData);
                     : "Use current location"}
                 </p>
                 <p className="mt-1 text-[11px] leading-4 text-gray-500 sm:text-xs">
-                  Allow location access from your browser
+                  Allow location access on your phone or browser
                 </p>
               </div>
             </button>

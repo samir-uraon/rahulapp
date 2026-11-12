@@ -20,6 +20,7 @@ import {
   Clock,
   Users,
   AlertCircle,
+  Palmtree,
 } from "lucide-react";
 
 async function calculateDistance(lat1, lng1, lat2, lng2) {
@@ -67,17 +68,7 @@ async function calculateDistance(lat1, lng1, lat2, lng2) {
   }
 }
 
-function getTodayKey(date = new Date()) {
-  return [
-    "sunday",
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-  ][date.getDay()];
-}
+ 
 
 function getDoctorId(doctor) {
   return String(doctor?._id || doctor?.id || "");
@@ -109,12 +100,81 @@ function getBookingSlot(booking) {
   return booking?.slot || booking?.selectedSlot || {};
 }
 
+ 
+
+ function getIndiaDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  return Object.fromEntries(
+    parts.map((part) => [part.type, part.value])
+  );
+}
+
+function getTodayKey(date = new Date()) {
+  return getIndiaDateParts(date).weekday.toLowerCase();
+}
+
 function getLocalDateKey(date = new Date()) {
-  return [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0"),
-  ].join("-");
+  const parts = getIndiaDateParts(date);
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function getIndiaDateTime(dateString, minutes) {
+  if (!dateString || minutes == null) return null;
+
+  const [year, month, day] = dateString.split("-").map(Number);
+
+  if (
+    !year ||
+    !month ||
+    !day ||
+    !Number.isFinite(minutes)
+  ) {
+    return null;
+  }
+
+  // India is UTC +05:30.
+  const timestamp =
+    Date.UTC(year, month - 1, day, 0, minutes) -
+    330 * 60 * 1000;
+
+  const result = new Date(timestamp);
+
+  return Number.isNaN(result.getTime()) ? null : result;
+}
+
+function getSlotStartDate(dateString, slot) {
+  const startMinutes = parseTime(
+    slot?.checkupStartTime || slot?.open
+  );
+
+  return startMinutes === null
+    ? null
+    : getIndiaDateTime(dateString, startMinutes);
+}
+
+function getSlotCloseDate(dateString, slot) {
+  const closeMinutes = parseTime(slot?.close);
+
+  return closeMinutes === null
+    ? null
+    : getIndiaDateTime(dateString, closeMinutes);
+}
+
+function getIndiaMinutes(date = new Date()) {
+  const parts = getIndiaDateParts(date);
+
+  return Number(parts.hour) * 60 + Number(parts.minute);
 }
 
 function getBookingDateKey(booking) {
@@ -179,6 +239,119 @@ function getSlotKey(slot) {
   if (!slot) return "";
 
   return `${slot.open || ""}-${slot.close || ""}`;
+}
+
+function normalizeSessionSlot(value) {
+  if (!value) return "";
+
+  const parts = String(value).split("-");
+
+  if (parts.length !== 2) return "";
+
+  const open = parseTime(parts[0]);
+  const close = parseTime(parts[1]);
+
+  if (open === null || close === null) return "";
+
+  return `${open}-${close}`;
+}
+
+function getMatchingSession(doctor, slot) {
+  const sessions = Array.isArray(doctor?.sessions)
+    ? doctor.sessions
+    : [];
+
+  const slotKey = normalizeSessionSlot(
+    `${slot?.open || ""}-${slot?.close || ""}`
+  );
+
+  if (!slotKey) return null;
+
+  return (
+    sessions.find((session) => {
+      const sessionKey =
+        normalizeSessionSlot(session.sessionId) ||
+        normalizeSessionSlot(
+          `${session.slotOpen || ""}-${session.slotClose || ""}`
+        );
+
+      return sessionKey === slotKey;
+    }) || null
+  );
+}
+
+function getSlotSessionState(doctor, slot) {
+  const session = getMatchingSession(doctor, slot);
+
+  if (!session) {
+    return {
+      session: null,
+      isSessionActive: false,
+      isSessionClosed: false,
+      sessionState: "not-started",
+    };
+  }
+
+  const status = String(session.status || "").toLowerCase();
+
+  const closedStatuses = [
+    "closed",
+    "completed",
+    "cancelled",
+    "canceled",
+    "expired",
+    "rejected",
+  ];
+
+  if (
+    session.cancel === true ||
+    Boolean(session.closedAt) ||
+    session.isSessionClosed === true ||
+    closedStatuses.includes(status)
+  ) {
+    return {
+      session,
+      isSessionActive: false,
+      isSessionClosed: true,
+      sessionState:
+        status === "expired" || session.sessionState === "expired"
+          ? "expired"
+          : "closed",
+    };
+  }
+
+  if (status === "active" || session.isSessionActive === true) {
+    const expiresAt = session.expiresAt
+      ? new Date(session.expiresAt).getTime()
+      : null;
+
+    if (
+      expiresAt !== null &&
+      Number.isFinite(expiresAt) &&
+      expiresAt <= Date.now()
+    ) {
+      return {
+        session,
+        isSessionActive: false,
+        isSessionClosed: true,
+        sessionState: "expired",
+      };
+    }
+
+    return {
+      session,
+      isSessionActive: true,
+      isSessionClosed: false,
+      sessionState: "active",
+    };
+  }
+
+  return {
+    session,
+    isSessionActive: false,
+    isSessionClosed: false,
+    sessionState: session.sessionState || status || "not-started",
+  };
 }
 
 function getPriorityRank(booking) {
@@ -251,12 +424,22 @@ function sortQueue(bookings) {
 }
 
 function isActiveBooking(booking) {
-  return ![
-    "completed",
-    "cancelled",
-    "no-show",
-    "noshow",
-  ].includes(String(booking?.status || "").toLowerCase());
+  const status = String(booking?.status || "").toLowerCase();
+
+  return [
+    "waiting",
+    "confirmed",
+    "booked",
+    "pending",
+    "serving",
+    "in-progress",
+    "in_progress",
+    "in progress",
+  ].includes(status);
+}
+
+function getBookingStatus(booking) {
+  return String(booking?.status || "").toLowerCase();
 }
 
 function getBookingsForSlot(doctor, dateKey, slot) {
@@ -284,36 +467,47 @@ function getBookingsForSlot(doctor, dateKey, slot) {
   });
 }
 
-function getSlotStartDate(dateString, slot) {
-  const startMinutes = parseTime(slot?.checkupStartTime || slot?.open);
 
-  if (startMinutes === null) return null;
-
-  const [year, month, day] = dateString.split("-").map(Number);
-
-  const result = new Date(year, month - 1, day, 0, 0, 0, 0);
-  result.setMinutes(startMinutes);
-
-  return result;
-}
-
-function getSlotCloseDate(dateString, slot) {
-  const closeMinutes = parseTime(slot?.close);
-
-  if (closeMinutes === null) return null;
-
-  const [year, month, day] = dateString.split("-").map(Number);
-
-  const result = new Date(year, month - 1, day, 0, 0, 0, 0);
-  result.setMinutes(closeMinutes);
-
-  return result;
-}
 
 function calculateSlotQueue(doctor, slot, date) {
   const dateKey = getLocalDateKey(date);
-  const bookings = getBookingsForSlot(doctor, dateKey, slot);
-  const queue = sortQueue(bookings);
+
+  const bookings = getBookingsForSlot(
+    doctor,
+    dateKey,
+    slot
+  );
+
+  const sessionState = getSlotSessionState(doctor, slot);
+
+  const servingBookings = bookings
+    .filter((booking) =>
+      [
+        "serving",
+        "in-progress",
+        "in_progress",
+        "in progress",
+      ].includes(getBookingStatus(booking))
+    )
+    .sort((a, b) => getCreatedAt(a) - getCreatedAt(b));
+
+  const waitingBookings = sortQueue(
+    bookings.filter((booking) =>
+      [
+        "waiting",
+        "confirmed",
+        "booked",
+        "pending",
+      ].includes(getBookingStatus(booking))
+    )
+  );
+
+  const serving = servingBookings[0] || null;
+
+  const queue = [
+    ...servingBookings,
+    ...waitingBookings,
+  ];
 
   const capacity = Math.max(
     0,
@@ -323,193 +517,105 @@ function calculateSlotQueue(doctor, slot, date) {
   const completed = (doctor?.bookings || []).filter((booking) => {
     return (
       getBookingDateKey(booking) === dateKey &&
-      getSlotKey(booking.slot || booking.selectedSlot || {}) ===
-        getSlotKey(slot) &&
-      String(booking.status || "").toLowerCase() === "completed"
+      getSlotKey(getBookingSlot(booking)) === getSlotKey(slot) &&
+      getBookingStatus(booking) === "completed"
     );
   }).length;
 
-  const scheduledStart = getSlotStartDate(dateKey, slot);
-  const slotClose = getSlotCloseDate(dateKey, slot);
-  const duration = Math.max(1, Number(doctor?.duration) || 20);
+  const closeDate = getSlotCloseDate(dateKey, slot);
 
-  const empty = {
-    total: bookings.length,
-    capacity,
-    peopleAhead: 0,
-    waiting: 0,
-    serving: null,
-    completed,
-    queue,
-    servingIndex: -1,
-    isStarted: false,
-    isFinished: false,
-    nextPatient: null,
-    expectedTurn: null,
-    estimatedWait: 0,
-  };
+  const isTimeFinished = closeDate
+    ? date.getTime() >= closeDate.getTime()
+    : false;
 
-  if (!scheduledStart || !slotClose) {
-    return {
-      ...empty,
-      peopleAhead: queue.length,
-      waiting: queue.length,
-      nextPatient: queue[0] || null,
-    };
-  }
+  // A slot is unavailable if it was explicitly closed,
+  // expired, or its scheduled closing time has passed.
+  const isFinished =
+    sessionState.isSessionClosed || isTimeFinished;
 
-  const isToday = dateKey === getLocalDateKey(new Date());
+  const waiting = waitingBookings.length;
 
-  if (!isToday) {
-    return {
-      ...empty,
-      peopleAhead: queue.length,
-      waiting: queue.length,
-      nextPatient: queue[0] || null,
-      expectedTurn: queue.length ? scheduledStart : null,
-    };
-  }
-
-  const now = date;
-
-  if (now >= slotClose) {
-    return {
-      ...empty,
-      isStarted: true,
-      isFinished: true,
-    };
-  }
-
-  const firstTurnTime = Math.max(
-    now.getTime(),
-    scheduledStart.getTime()
+  const duration = Math.max(
+    1,
+    Number(doctor?.duration) || 20
   );
-
-  const latestCreationTime = queue.reduce(
-    (latest, booking) => Math.max(latest, getCreatedAt(booking)),
-    firstTurnTime
-  );
-
-  const expectedTurn = new Date(
-    Math.max(firstTurnTime, latestCreationTime) +
-      Math.max(0, queue.length - 1) * duration * 60_000
-  );
-
-  if (now < scheduledStart) {
-    return {
-      ...empty,
-      peopleAhead: queue.length,
-      waiting: queue.length,
-      nextPatient: queue[0] || null,
-      expectedTurn: queue.length ? scheduledStart : null,
-      estimatedWait: Math.max(
-        0,
-        Math.ceil((scheduledStart.getTime() - now.getTime()) / 60_000)
-      ),
-    };
-  }
-
-  const firstBookingTime = queue
-    .map((booking) => getCreatedAt(booking))
-    .filter((timestamp) => {
-      if (!timestamp) return false;
-
-      const createdAt = new Date(timestamp);
-
-      return (
-        getLocalDateKey(createdAt) === dateKey &&
-        createdAt.getTime() >= scheduledStart.getTime() &&
-        createdAt.getTime() < slotClose.getTime()
-      );
-    })
-    .sort((a, b) => a - b)[0];
-
-  const queueStart = Math.max(
-    scheduledStart.getTime(),
-    firstBookingTime || scheduledStart.getTime()
-  );
-
-  if (now.getTime() < queueStart) {
-    return {
-      ...empty,
-      peopleAhead: queue.length,
-      waiting: queue.length,
-      nextPatient: queue[0] || null,
-      expectedTurn: queue.length ? new Date(queueStart) : null,
-      estimatedWait: Math.ceil((queueStart - now.getTime()) / 60_000),
-    };
-  }
-
-  const calculatedIndex = Math.floor(
-    (now.getTime() - queueStart) / (duration * 60_000)
-  );
-
-  if (calculatedIndex >= queue.length) {
-    return {
-      ...empty,
-      isStarted: true,
-    };
-  }
-
-  const servingIndex = Math.max(0, calculatedIndex);
-  const serving = queue[servingIndex] || null;
-  const waiting = Math.max(0, queue.length - servingIndex - 1);
-
-  const nextBooking = queue[servingIndex + 1] || null;
-
-  const nextExpectedTurn = nextBooking
-    ? new Date(
-        Math.max(
-          now.getTime(),
-          queueStart + (servingIndex + 1) * duration * 60_000,
-          getCreatedAt(nextBooking)
-        )
-      )
-    : null;
-
-  const safeExpectedTurn =
-    nextExpectedTurn && nextExpectedTurn < slotClose
-      ? nextExpectedTurn
-      : null;
 
   return {
-    ...empty,
+    total: bookings.length,
+    capacity,
+
     peopleAhead: waiting,
     waiting,
+
     serving,
-    servingIndex,
-    isStarted: true,
-    nextPatient: nextBooking,
-    expectedTurn: safeExpectedTurn,
-    estimatedWait: safeExpectedTurn
-      ? Math.max(
-          0,
-          Math.ceil((safeExpectedTurn.getTime() - now.getTime()) / 60_000)
-        )
-      : 0,
+    completed,
+    queue,
+
+    servingIndex: serving ? 0 : -1,
+    isStarted: Boolean(serving),
+    isFinished,
+
+    isSessionClosed: sessionState.isSessionClosed,
+    isSessionActive: sessionState.isSessionActive,
+    sessionState: sessionState.sessionState,
+    session: sessionState.session,
+
+    nextPatient: waitingBookings[0] || null,
+
+    estimatedWait: waiting * duration,
+    expectedTurn: null,
   };
 }
 
-function getDoctorStatus(schedule, now = new Date()) {
-  const today = getTodayKey(now);
-  const todaySchedule = schedule?.[today];
+function getDoctorStatus(doctor, now = new Date()) {
+  if (doctor?.isOnHolidayToday) {
+    return {
+      isOpen: false,
+      text: "On Holiday Today",
+      currentSlot: null,
+      nextSlot: null,
+      isOnHoliday: true,
+    };
+  }
 
-  if (!todaySchedule?.active || !todaySchedule?.slots?.length) {
+  const schedule = doctor?.schedule || {};
+  const today = getTodayKey(now);
+  const todaySchedule = getScheduleForDay(schedule, today);
+
+  if (
+    !todaySchedule?.active ||
+    !Array.isArray(todaySchedule.slots) ||
+    todaySchedule.slots.length === 0
+  ) {
     return {
       isOpen: false,
       text: "Closed Today",
       currentSlot: null,
       nextSlot: null,
+      isOnHoliday: false,
     };
   }
 
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const currentMinutes = getIndiaMinutes(now);
 
-  const currentSlot = todaySchedule.slots.find((slot) => {
+  const slots = todaySchedule.slots
+    .filter((slot) => slot.active !== false)
+    .map((slot) => ({
+      ...slot,
+      ...getSlotSessionState(doctor, slot),
+    }))
+    .filter(
+      (slot) =>
+        parseTime(slot.open) !== null &&
+        parseTime(slot.close) !== null
+    );
+
+  const currentSlot = slots.find((slot) => {
     const open = parseTime(slot.open);
     const close = parseTime(slot.close);
 
     return (
+      !slot.isSessionClosed &&
       open !== null &&
       close !== null &&
       currentMinutes >= open &&
@@ -523,16 +629,23 @@ function getDoctorStatus(schedule, now = new Date()) {
       text: `Open · Closes ${formatSlotTime(currentSlot.close)}`,
       currentSlot,
       nextSlot: null,
+      isOnHoliday: false,
     };
   }
 
-  const nextSlot = todaySchedule.slots
+  const nextSlot = slots
     .filter((slot) => {
       const open = parseTime(slot.open);
 
-      return open !== null && open > currentMinutes;
+      return (
+        !slot.isSessionClosed &&
+        open !== null &&
+        open > currentMinutes
+      );
     })
-    .sort((a, b) => parseTime(a.open) - parseTime(b.open))[0];
+    .sort(
+      (a, b) => parseTime(a.open) - parseTime(b.open)
+    )[0] || null;
 
   if (nextSlot) {
     return {
@@ -540,6 +653,7 @@ function getDoctorStatus(schedule, now = new Date()) {
       text: `Closed · Opens ${formatSlotTime(nextSlot.open)}`,
       currentSlot: null,
       nextSlot,
+      isOnHoliday: false,
     };
   }
 
@@ -548,6 +662,7 @@ function getDoctorStatus(schedule, now = new Date()) {
     text: "Closed Today",
     currentSlot: null,
     nextSlot: null,
+    isOnHoliday: false,
   };
 }
 
@@ -557,9 +672,7 @@ function getScheduleText(schedule) {
   }
 
   return schedule.slots
-    .map(
-      (slot) => `${formatSlotTime(slot.open)} - ${formatSlotTime(slot.close)}`
-    )
+    .map((slot) => `${formatSlotTime(slot.open)} - ${formatSlotTime(slot.close)}`)
     .join(" / ");
 }
 
@@ -581,26 +694,36 @@ function getDoctorFee(value, fallback = 0) {
   return Number.isFinite(fallbackFee) && fallbackFee >= 0 ? fallbackFee : 0;
 }
 
-function getSlotLabel(slot, dateKey, now, status) {
-  const closeDate = getSlotCloseDate(dateKey, slot);
-  const startDate = getSlotStartDate(dateKey, slot);
+function getSlotLabel(slot, dateString, now, queueInfo, isOnHoliday) {
+  if (isOnHoliday) return "Doctor on Holiday";
 
-  if (closeDate && now >= closeDate) return "Finished";
-
-  if (
-    status.isOpen &&
-    status.currentSlot?.open === slot.open &&
-    status.currentSlot?.close === slot.close
-  ) {
-    return "Currently open";
+  if (queueInfo.isSessionClosed) {
+    return queueInfo.sessionState === "expired"
+      ? "Session expired"
+      : "Session closed";
   }
 
-  if (startDate && now >= startDate) return "In progress";
+  const closeDate = getSlotCloseDate(dateString, slot);
+  const startDate = getSlotStartDate(dateString, slot);
+
+  if (closeDate && now >= closeDate) {
+    return "Finished";
+  }
+
+  if (
+    startDate &&
+    closeDate &&
+    now >= startDate &&
+    now < closeDate
+  ) {
+    return queueInfo.isSessionActive
+      ? "Live session active"
+      : "Consultation time";
+  }
 
   return "Upcoming";
 }
 
-// YouTube-Style Top Loading Bar Component
 function YouTubeLoader({ isLoading }) {
   const [progress, setProgress] = useState(0);
 
@@ -728,11 +851,20 @@ export default function ClinicDetailsPage() {
           cache: "no-store",
         });
 
-        if (!response.ok) {
-          throw new Error("Failed to fetch clinic details");
-        }
+        const data = await response.json().catch(() => ({}));
 
-        const data = await response.json();
+if (!response.ok) {
+  console.error("Clinic API error:", {
+    status: response.status,
+    response: data,
+  });
+
+  throw new Error(
+    data.error ||
+    data.message ||
+    `Failed to fetch clinic details (${response.status})`
+  );
+}
 
         if (!data.success || !data.clinic || typeof data.clinic !== "object") {
           throw new Error(data.message || "Invalid clinic response");
@@ -815,16 +947,16 @@ export default function ClinicDetailsPage() {
     );
   };
 
-useEffect(() => {
-  if (status === "loading") return;
+  useEffect(() => {
+    if (status === "loading") return;
 
-  setLocation(getSessionLocation(session?.user));
-}, [
-  status,
-  session?.user?.location,
-  session?.user?.address,
-  session?.user?.locationName,
-]);
+    setLocation(getSessionLocation(session?.user));
+  }, [
+    status,
+    session?.user?.location,
+    session?.user?.address,
+    session?.user?.locationName,
+  ]);
 
   useEffect(() => {
     const updateTime = () => setCurrentTime(new Date());
@@ -920,63 +1052,95 @@ useEffect(() => {
   const today = getTodayKey(currentTime);
   const todayDate = getLocalDateKey(currentTime);
 
-  const doctors = useMemo(() => {
-    if (!clinic || !Array.isArray(clinic.doctors)) {
-      return [];
-    }
+const doctors = useMemo(() => {
+  if (!clinic || !Array.isArray(clinic.doctors)) {
+    return [];
+  }
 
-    return clinic.doctors.map((doctor) => {
-      const doctorId = getDoctorId(doctor);
+  return clinic.doctors.map((doctor) => {
+    const doctorId = getDoctorId(doctor);
 
-      const normalizedDoctor = {
-        ...doctor,
-        _id: doctorId,
-        id: doctorId,
-        name: doctor.name || "Doctor",
-        profileImage: doctor.profileImage || "",
-        schedule: doctor.schedule || {},
-        isEmergency: doctor.isEmergency === true,
-        bookings: Array.isArray(doctor.bookings) ? doctor.bookings : [],
-      };
+    const normalizedDoctor = {
+      ...doctor,
+      _id: doctorId,
+      id: doctorId,
+      name: doctor.name || doctor.fullName || "Doctor",
+      profileImage: doctor.profileImage || "",
+      schedule: doctor.schedule || {},
+      isEmergency: doctor.isEmergency === true,
+      isOnHolidayToday: doctor.isOnHolidayToday === true,
 
-      const todaySchedule = getScheduleForDay(
-        normalizedDoctor.schedule,
-        today
-      );
+      sessions: Array.isArray(doctor.sessions)
+        ? doctor.sessions
+        : [],
 
-      const doctorStatus = getDoctorStatus(
-        {
-          [today]: todaySchedule,
-        },
-        currentTime
-      );
+      isSessionActive: doctor.isSessionActive === true,
+      activeSession: doctor.activeSession || null,
 
-      const slotQueues =
-        todaySchedule?.active && Array.isArray(todaySchedule.slots)
-          ? todaySchedule.slots
-              .filter((slot) => slot.active !== false)
-              .map((slot) => ({
+      holidayDates: Array.isArray(doctor.holidayDates)
+        ? doctor.holidayDates
+        : [],
+
+      bookings: Array.isArray(doctor.bookings)
+        ? doctor.bookings
+        : [],
+    };
+
+    const todaySchedule = getScheduleForDay(
+      normalizedDoctor.schedule,
+      today
+    );
+
+    const doctorStatus = getDoctorStatus(
+      normalizedDoctor,
+      currentTime
+    );
+
+    const slotQueues =
+      todaySchedule?.active &&
+      Array.isArray(todaySchedule.slots)
+        ? todaySchedule.slots
+            .filter((slot) => slot.active !== false)
+            .map((slot) => {
+              const queueInfo = calculateSlotQueue(
+                normalizedDoctor,
                 slot,
-                queueInfo: calculateSlotQueue(
-                  normalizedDoctor,
-                  slot,
-                  currentTime
-                ),
-              }))
-          : [];
+                currentTime
+              );
 
-      return {
-        ...normalizedDoctor,
-        todaySchedule,
-        status: doctorStatus,
-        slotQueues,
-      };
-    });
-  }, [clinic, currentTime, today]);
+              const isCurrentSlot =
+                doctorStatus.isOpen &&
+                doctorStatus.currentSlot?.open === slot.open &&
+                doctorStatus.currentSlot?.close === slot.close;
+
+              return {
+                slot,
+                queueInfo,
+                isCurrentSlot,
+                isSessionClosed: queueInfo.isSessionClosed,
+                isSessionActive: queueInfo.isSessionActive,
+                sessionState: queueInfo.sessionState,
+                session: queueInfo.session,
+              };
+            })
+        : [];
+
+    const hasActiveSession = normalizedDoctor.sessions.some(
+      (session) => session.isSessionActive === true
+    );
+
+    return {
+      ...normalizedDoctor,
+      todaySchedule,
+      status: doctorStatus,
+      slotQueues,
+      hasActiveSession,
+    };
+  });
+}, [clinic, currentTime, today]);
 
   return (
     <main className="min-h-screen bg-gray-50">
-      {/* YouTube Top Progress Loader */}
       <YouTubeLoader isLoading={loadingClinic || status === "loading"} />
 
       <Header showBack={false} />
@@ -1164,6 +1328,11 @@ useEffect(() => {
                 <div className="divide-y divide-gray-100">
                   {doctors.map((doctor) => {
                     const todaySchedule = doctor.todaySchedule;
+                 
+ 
+
+                    let buttonText = "Book Consultation";
+                  
 
                     return (
                       <article key={doctor.id} className="p-5 sm:p-6">
@@ -1189,13 +1358,25 @@ useEffect(() => {
 
                                 <span
                                   className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                                    doctor.status.isOpen
+                                    doctor.isOnHolidayToday
+                                      ? "bg-amber-50 text-amber-700"
+                                      : doctor.status.isOpen
                                       ? "bg-emerald-50 text-emerald-700"
                                       : "bg-gray-100 text-gray-500"
                                   }`}
                                 >
-                                  {doctor.status.isOpen ? "Available" : "Closed"}
+                                  {doctor.isOnHolidayToday
+                                    ? "On Holiday"
+                                    : doctor.status.isOpen
+                                    ? "Available"
+                                    : "Closed"}
                                 </span>
+
+                              {doctor.hasActiveSession && (
+  <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">
+    Live Session Active
+  </span>
+)}
                               </div>
 
                               <p className="mt-1 text-sm text-gray-500">
@@ -1219,129 +1400,157 @@ useEffect(() => {
                           </div>
 
                           <div className="space-y-3">
-                            {todaySchedule?.active &&
-                            todaySchedule?.slots?.length > 0 ? (
+                            {doctor.isOnHolidayToday ? (
+                              <div className="flex items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50/50 p-4 text-xs font-semibold text-amber-800">
+                                <Palmtree className="h-4 w-4 shrink-0 text-amber-600" />
+                                <span>Doctor is on holiday today.</span>
+                              </div>
+                            ) : todaySchedule?.active &&
+                              todaySchedule?.slots?.length > 0 ? (
                               <div className="space-y-2">
-                                {doctor.slotQueues.map(
-                                  ({ slot, queueInfo }, index) => {
-                                    const isCurrentActiveSlot =
-                                      doctor.status.isOpen &&
-                                      doctor.status.currentSlot?.open ===
-                                        slot.open &&
-                                      doctor.status.currentSlot?.close ===
-                                        slot.close;
+                            {doctor.slotQueues.map(
+  (
+    {
+      slot,
+      queueInfo,
+      isCurrentSlot,
+      isSessionClosed,
+      isSessionActive,
+      sessionState,
+    },
+    index
+  ) => {
+    const isFinished = queueInfo.isFinished;
 
-                                    const slotLabel = getSlotLabel(
-                                      slot,
-                                      todayDate,
-                                      currentTime,
-                                      doctor.status
-                                    );
+    const isUnavailable =
+      isSessionClosed || isFinished;
 
-                                    const isFinished = queueInfo.isFinished;
+    const slotLabel = getSlotLabel(
+      slot,
+      todayDate,
+      currentTime,
+      queueInfo,
+      doctor.isOnHolidayToday
+    );
 
-                                    return (
-                                      <div
-                                        key={`${slot.open}-${slot.close}-${index}`}
-                                        className={`rounded-xl border p-3.5 ${
-                                          isCurrentActiveSlot
-                                            ? "border-emerald-200 bg-emerald-50/40"
-                                            : "border-gray-200 bg-gray-50/50"
-                                        }`}
-                                      >
-                                        <div className="flex flex-wrap items-center justify-between gap-2">
-                                          <div className="flex flex-wrap items-center gap-2">
-                                            <span className="text-sm font-bold text-gray-800">
-                                              {formatSlotTime(slot.open)} -{" "}
-                                              {formatSlotTime(slot.close)}
-                                            </span>
+    return (
+      <div
+        key={`${slot.open}-${slot.close}-${index}`}
+        className={`rounded-xl border p-3.5 ${
+          isUnavailable
+            ? "border-red-200 bg-red-50/40"
+            : isCurrentSlot
+              ? "border-emerald-200 bg-emerald-50/40"
+              : "border-gray-200 bg-gray-50/50"
+        }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-bold text-gray-800">
+              {formatSlotTime(slot.open)} -{" "}
+              {formatSlotTime(slot.close)}
+            </span>
 
-                                            {isCurrentActiveSlot && (
-                                              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-emerald-700">
-                                                NOW
-                                              </span>
-                                            )}
-                                          </div>
+            {isUnavailable ? (
+              <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-red-700">
+                {sessionState === "expired" ? "EXPIRED" : "CLOSED"}
+              </span>
+            ) : isCurrentSlot ? (
+              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-emerald-700">
+                NOW
+              </span>
+            ) : isSessionActive ? (
+              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-blue-700">
+                ACTIVE
+              </span>
+            ) : null}
+          </div>
 
-                                          <span
-                                            className={`shrink-0 text-right text-xs font-bold sm:text-sm ${
-                                              queueInfo.peopleAhead > 0
-                                                ? "text-orange-600"
-                                                : "text-emerald-600"
-                                            }`}
-                                          >
-                                            {queueInfo.peopleAhead === 0
-                                              ? "No one ahead"
-                                              : `${queueInfo.peopleAhead} ${
-                                                  queueInfo.peopleAhead === 1
-                                                    ? "person"
-                                                    : "people"
-                                                } ahead`}
-                                          </span>
-                                        </div>
+          <span
+            className={`shrink-0 text-right text-xs font-bold sm:text-sm ${
+              isUnavailable
+                ? "text-gray-400"
+                : queueInfo.peopleAhead > 0
+                  ? "text-orange-600"
+                  : "text-emerald-600"
+            }`}
+          >
+            {isUnavailable
+              ? "Unavailable"
+              : queueInfo.peopleAhead === 0
+                ? "No one ahead"
+                : `${queueInfo.peopleAhead} ${
+                    queueInfo.peopleAhead === 1
+                      ? "person"
+                      : "people"
+                  } ahead`}
+          </span>
+        </div>
 
-                                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-gray-200/70 pt-2">
-                                          <span className="text-xs font-medium text-gray-500">
-                                            {slotLabel}
-                                          </span>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-gray-200/70 pt-2">
+          <span className="text-xs font-medium text-gray-500">
+            {slotLabel}
+          </span>
 
-                                          <span className="text-xs font-semibold text-gray-500">
-                                            {queueInfo.total}/{queueInfo.capacity}{" "}
-                                            booked
-                                          </span>
-                                        </div>
+          <span className="text-xs font-semibold text-gray-500">
+            {queueInfo.total}/{queueInfo.capacity} booked
+          </span>
+        </div>
 
-                                        {isCurrentActiveSlot &&
-                                          queueInfo.serving && (
-                                            <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-700">
-                                              <Users className="h-3.5 w-3.5" />
-                                              Serving:{" "}
-                                              {getPriorityRank(queueInfo.serving) === 0
-                                                ? "Emergency Patient"
-                                                : queueInfo.serving.patient?.name ||
-                                                  queueInfo.serving.patientName ||
-                                                  "Current patient"}
-                                            </div>
-                                          )}
+        {isCurrentSlot &&
+          !isUnavailable &&
+          queueInfo.serving && (
+            <div className="mt-2 flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+              <Users className="h-3.5 w-3.5" />
 
-                                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-700">
-                                            <Clock className="h-3.5 w-3.5" />
-                                            {isFinished
-                                              ? "Slot ended"
-                                              : "Slot Open"}
-                                          </span>
+              Serving:{" "}
+              {getPriorityRank(queueInfo.serving) === 0
+                ? "Emergency Patient"
+                : queueInfo.serving.patient?.name ||
+                  queueInfo.serving.patientName ||
+                  "Current patient"}
+            </div>
+          )}
 
-                                          <div className="flex flex-wrap items-center gap-2">
-                                            {isCurrentActiveSlot &&
-                                              queueInfo.estimatedWait > 0 && (
-                                                <span className="text-[11px] font-medium text-gray-500">
-                                                  Approx. {queueInfo.estimatedWait}{" "}
-                                                  min
-                                                </span>
-                                              )}
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+          <span
+            className={`inline-flex items-center gap-1 text-xs font-semibold ${
+              isUnavailable
+                ? "text-red-600"
+                : "text-indigo-700"
+            }`}
+          >
+            <Clock className="h-3.5 w-3.5" />
 
-                                            {!isFinished &&
-                                              isCurrentActiveSlot &&
-                                              doctor.status.isOpen &&
-                                              doctor.isEmergency !== true && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    handleEmergencyBooking(doctor)
-                                                  }
-                                                  className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-red-700 active:scale-95"
-                                                >
-                                                  <AlertCircle className="h-3.5 w-3.5" />
-                                                  Emergency Book
-                                                </button>
-                                              )}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    );
-                                  }
-                                )}
+            {isUnavailable
+              ? "Slot unavailable"
+              : isCurrentSlot
+                ? "Slot currently open"
+                : "Upcoming slot"}
+          </span>
+
+          <div className="flex flex-wrap items-center gap-2">
+          
+
+            {!isUnavailable &&
+              isCurrentSlot &&
+              doctor.status.isOpen &&
+              doctor.isEmergency !== true && (
+                <button
+                  type="button"
+                  onClick={() => handleEmergencyBooking(doctor)}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-red-700 active:scale-95"
+                >
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  Emergency Book
+                </button>
+              )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+)}
                               </div>
                             ) : (
                               <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-center text-xs font-medium text-gray-500">
@@ -1351,10 +1560,10 @@ useEffect(() => {
 
                             <button
                               type="button"
-                              onClick={() => setSelectedDoctor(doctor)}
-                              className="min-h-[40px] w-full rounded-xl bg-indigo-600 px-4 text-sm font-bold text-white transition hover:bg-indigo-700"
+                              onClick={() => setSelectedDoctor(doctor)}                             
+                              className="min-h-[40px] w-full rounded-xl bg-indigo-600 px-4 text-sm font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-gray-500"
                             >
-                              Book Consultation
+                              {buttonText}
                             </button>
                           </div>
                         </div>

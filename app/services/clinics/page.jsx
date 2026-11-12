@@ -20,7 +20,6 @@ import {
   ArrowRight,
   Zap,
   Star,
-  Activity,
 } from "lucide-react";
 
 // Persistent memory cache across re-renders
@@ -181,34 +180,47 @@ function getDoctorId(doctor) {
   return String(doctor?._id || doctor?.id || "");
 }
 
-function getTodayKey(date = new Date()) {
-  const days = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-  ];
 
-  return days[date.getDay()];
-}
-
-function getIndiaDateKey(date = new Date()) {
+function getIndiaDateParts(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    weekday: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
   }).formatToParts(date);
 
-  const values = Object.fromEntries(
+  return Object.fromEntries(
     parts.map((part) => [part.type, part.value])
   );
-
-  return `${values.year}-${values.month}-${values.day}`;
 }
+
+function getTodayKey(date = new Date()) {
+  return getIndiaDateParts(date).weekday;
+}
+
+function getIndiaDateKey(date = new Date()) {
+  const parts = getIndiaDateParts(date);
+
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function getDateKey(date = new Date()) {
+  return getIndiaDateKey(date);
+}
+
+function getIndiaMinutes(date = new Date()) {
+  const parts = getIndiaDateParts(date);
+
+  return (
+    Number(parts.hour) * 60 +
+    Number(parts.minute)
+  );
+}
+
 
 function isDoctorOnHoliday(doctor, date = new Date()) {
   const today = getIndiaDateKey(date);
@@ -235,6 +247,7 @@ function getDaySchedule(schedule, day) {
   );
 }
 
+
 function getDoctorSlotQueues(doctor, date = new Date()) {
   const today = getTodayKey(date);
 
@@ -242,19 +255,39 @@ function getDoctorSlotQueues(doctor, date = new Date()) {
     return [];
   }
 
-  const todaySchedule = getDaySchedule(doctor?.schedule, today);
+  const todaySchedule = getDaySchedule(
+    doctor?.schedule,
+    today
+  );
 
-  if (!todaySchedule?.active || !Array.isArray(todaySchedule.slots)) {
+  if (
+    !todaySchedule?.active ||
+    !Array.isArray(todaySchedule.slots)
+  ) {
     return [];
   }
 
   return todaySchedule.slots
     .filter((slot) => slot?.active !== false)
-    .map((slot) => ({
-      slot,
-      queueInfo: calculateSlotQueue(doctor, slot, date),
-    }));
+    .map((slot) => {
+      const sessionState = getSlotSessionState(
+        doctor,
+        slot
+      );
+
+      return {
+        slot,
+        ...sessionState,
+        queueInfo: calculateSlotQueue(
+          doctor,
+          slot,
+          date
+        ),
+      };
+    });
 }
+
+
 
 function getDoctorStatus(doctor, now = new Date()) {
   const today = getTodayKey(now);
@@ -271,7 +304,10 @@ function getDoctorStatus(doctor, now = new Date()) {
     };
   }
 
-  const todaySchedule = getDaySchedule(doctor?.schedule, today);
+  const todaySchedule = getDaySchedule(
+    doctor?.schedule,
+    today
+  );
 
   if (!todaySchedule?.active) {
     return {
@@ -288,18 +324,28 @@ function getDoctorStatus(doctor, now = new Date()) {
   const slots = Array.isArray(todaySchedule.slots)
     ? todaySchedule.slots
         .filter((slot) => slot?.active !== false)
-        .map((slot) => ({
-          ...slot,
-          openMinutes: getMinutes(slot.open),
-          closeMinutes: getMinutes(slot.close),
-        }))
+        .map((slot) => {
+          const sessionState = getSlotSessionState(
+            doctor,
+            slot
+          );
+
+          return {
+            ...slot,
+            ...sessionState,
+            openMinutes: getMinutes(slot.open),
+            closeMinutes: getMinutes(slot.close),
+          };
+        })
         .filter(
           (slot) =>
             slot.openMinutes != null &&
             slot.closeMinutes != null &&
             slot.closeMinutes > slot.openMinutes
         )
-        .sort((a, b) => a.openMinutes - b.openMinutes)
+        .sort(
+          (a, b) => a.openMinutes - b.openMinutes
+        )
     : [];
 
   if (slots.length === 0) {
@@ -314,18 +360,12 @@ function getDoctorStatus(doctor, now = new Date()) {
     };
   }
 
-  const indiaTime = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(now);
+  const currentMinutes = getIndiaMinutes(now);
 
-  const [hour, minute] = indiaTime.split(":").map(Number);
-  const currentMinutes = hour * 60 + minute;
-
+  // Only an unclosed slot can be considered open.
   const currentSlot = slots.find(
     (slot) =>
+      !slot.isSessionClosed &&
       currentMinutes >= slot.openMinutes &&
       currentMinutes < slot.closeMinutes
   );
@@ -334,7 +374,9 @@ function getDoctorStatus(doctor, now = new Date()) {
     return {
       isOpen: true,
       status: "Open Now",
-      timeText: `Today: ${formatTime(currentSlot.open)} - ${formatTime(currentSlot.close)}`,
+      timeText: `Today: ${formatTime(
+        currentSlot.open
+      )} - ${formatTime(currentSlot.close)}`,
       schedule: todaySchedule,
       currentSlot,
       nextSlot: null,
@@ -342,14 +384,21 @@ function getDoctorStatus(doctor, now = new Date()) {
     };
   }
 
+  // Find the next slot that has not been closed.
   const nextSlot =
-    slots.find((slot) => slot.openMinutes > currentMinutes) || null;
+    slots.find(
+      (slot) =>
+        !slot.isSessionClosed &&
+        slot.openMinutes > currentMinutes
+    ) || null;
 
   if (nextSlot) {
     return {
       isOpen: false,
       status: "Closed Now",
-      timeText: `Opens today at ${formatTime(nextSlot.open)}`,
+      timeText: `Opens today at ${formatTime(
+        nextSlot.open
+      )}`,
       schedule: todaySchedule,
       currentSlot: null,
       nextSlot,
@@ -357,16 +406,25 @@ function getDoctorStatus(doctor, now = new Date()) {
     };
   }
 
+  const currentScheduledSlot = slots.find(
+    (slot) =>
+      currentMinutes >= slot.openMinutes &&
+      currentMinutes < slot.closeMinutes
+  );
+
   return {
     isOpen: false,
     status: "Closed Today",
-    timeText: "All sessions have ended for today",
+    timeText: currentScheduledSlot?.isSessionClosed
+      ? "Current session has been closed"
+      : "All sessions have ended for today",
     schedule: todaySchedule,
     currentSlot: null,
     nextSlot: null,
     isHoliday: false,
   };
 }
+
 
 function getClinicStatus(doctors, now = new Date()) {
   const availableDoctors = (doctors || []).filter(
@@ -438,13 +496,7 @@ function getClinicStatus(doctors, now = new Date()) {
   };
 }
 
-function getDateKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
+ 
 
 function getBookingDateKey(booking) {
   if (!booking?.date) return "";
@@ -468,6 +520,115 @@ function getSlotKey(slot) {
   if (!slot) return "";
   return `${slot.open || ""}-${slot.close || ""}`;
 }
+
+
+function normalizeSessionSlot(value) {
+  if (!value) return null;
+
+  const parts = String(value).split("-");
+
+  if (parts.length !== 2) return null;
+
+  const open = getMinutes(parts[0]);
+  const close = getMinutes(parts[1]);
+
+  if (open == null || close == null) return null;
+
+  return `${open}-${close}`;
+}
+
+function getMatchingSession(doctor, slot) {
+  const sessions = Array.isArray(doctor?.sessions)
+    ? doctor.sessions
+    : [];
+
+  const slotKey = normalizeSessionSlot(
+    `${slot?.open || ""}-${slot?.close || ""}`
+  );
+
+  if (!slotKey) return null;
+
+  return (
+    sessions.find((session) => {
+      const sessionKey =
+        normalizeSessionSlot(session.sessionId) ||
+        normalizeSessionSlot(
+          `${session.slotOpen || ""}-${session.slotClose || ""}`
+        );
+
+      return sessionKey === slotKey;
+    }) || null
+  );
+}
+
+function getSlotSessionState(doctor, slot) {
+  const session = getMatchingSession(doctor, slot);
+
+  if (!session) {
+    return {
+      session: null,
+      isSessionActive: false,
+      isSessionClosed: false,
+      sessionState: "not-started",
+    };
+  }
+
+  const status = String(
+    session.status || ""
+  ).toLowerCase();
+
+  const isClosed =
+    session.cancel === true ||
+    Boolean(session.closedAt) ||
+    session.isSessionClosed === true ||
+    [
+      "closed",
+      "completed",
+      "cancelled",
+      "canceled",
+      "expired",
+      "rejected",
+    ].includes(status);
+
+  if (isClosed) {
+    return {
+      session,
+      isSessionActive: false,
+      isSessionClosed: true,
+      sessionState:
+        session.sessionState ||
+        (status === "expired" ? "expired" : "closed"),
+    };
+  }
+
+  const expiresAt = session.expiresAt
+    ? new Date(session.expiresAt).getTime()
+    : null;
+
+  if (
+    status === "active" &&
+    expiresAt != null &&
+    Number.isFinite(expiresAt) &&
+    expiresAt <= Date.now()
+  ) {
+    return {
+      session,
+      isSessionActive: false,
+      isSessionClosed: true,
+      sessionState: "expired",
+    };
+  }
+
+  return {
+    session,
+    isSessionActive:
+      session.isSessionActive === true ||
+      status === "active",
+    isSessionClosed: false,
+    sessionState: status || "not-started",
+  };
+}
+
 
 function getPriorityRank(booking) {
   return booking?.priority?.toLowerCase() === "emergency" ||
@@ -525,14 +686,31 @@ function getSlotBookings(doctor, dateKey, slot) {
   });
 }
 
+
 function calculateSlotQueue(doctor, slot, currentDate) {
-  const capacity = Number(slot?.capacity ?? doctor?.capacity) || 0;
-  const dateKey = getDateKey(currentDate);
-  const bookings = getSlotBookings(doctor, dateKey, slot);
+  const capacity =
+    Number(slot?.capacity ?? doctor?.capacity) || 0;
+
+  const dateKey = getIndiaDateKey(currentDate);
+
+  const bookings = getSlotBookings(
+    doctor,
+    dateKey,
+    slot
+  );
 
   const activeBookings = bookings.filter(
     (booking) =>
-      !["completed", "cancelled", "no-show"].includes(
+      ![
+        "completed",
+        "cancelled",
+        "canceled",
+        "no-show",
+        "skipped",
+        "rejected",
+        "refunded",
+        "failed",
+      ].includes(
         String(booking.status || "").toLowerCase()
       )
   );
@@ -540,118 +718,64 @@ function calculateSlotQueue(doctor, slot, currentDate) {
   const queue = sortQueue(activeBookings);
 
   const completedBookings = bookings.filter(
-    (booking) => String(booking.status || "").toLowerCase() === "completed"
+    (booking) =>
+      String(booking.status || "").toLowerCase() ===
+      "completed"
   );
 
-  const checkupStart = getMinutes(slot.checkupStartTime || slot.open);
-  const closeTime = getMinutes(slot.close);
-  const currentMinutes =
-    currentDate.getHours() * 60 + currentDate.getMinutes();
+  const checkupStart = getMinutes(
+    slot?.checkupStartTime || slot?.open
+  );
 
-  const duration = Math.max(1, Number(doctor.duration) || 20);
-  const isToday = dateKey === getDateKey(currentDate);
+  const closeTime = getMinutes(slot?.close);
 
-  const emptyQueue = {
+  const currentMinutes = getIndiaMinutes(currentDate);
+
+  const duration = Math.max(
+    1,
+    Number(doctor?.duration) || 20
+  );
+
+  const isToday =
+    dateKey === getIndiaDateKey(new Date());
+
+  const sessionState = getSlotSessionState(
+    doctor,
+    slot
+  );
+
+  const isFinished =
+    sessionState.isSessionClosed ||
+    (
+      isToday &&
+      closeTime != null &&
+      currentMinutes >= closeTime
+    );
+
+  const isStarted =
+    isToday &&
+    checkupStart != null &&
+    currentMinutes >= checkupStart &&
+    !isFinished;
+
+  return {
     total: bookings.length,
     capacity,
-    peopleAhead: 0,
-    waiting: 0,
+    peopleAhead: queue.length,
+    waiting: queue.length,
     serving: null,
     completed: completedBookings.length,
     queue,
     servingIndex: -1,
-    isStarted: false,
-    isFinished: false,
-    nextPatient: null,
-    estimatedWait: 0,
-  };
-
-  if (checkupStart == null || closeTime == null || !isToday) {
-    return {
-      ...emptyQueue,
-      peopleAhead: queue.length,
-      waiting: queue.length,
-      nextPatient: queue[0] || null,
-    };
-  }
-
-  if (currentMinutes >= closeTime) {
-    return {
-      ...emptyQueue,
-      isStarted: true,
-      isFinished: true,
-    };
-  }
-
-  let queueStart = checkupStart;
-
-  const firstBookingTime = queue
-    .map((booking) => {
-      if (!booking.createdAt) return null;
-
-      const createdAt = new Date(booking.createdAt);
-
-      if (
-        Number.isNaN(createdAt.getTime()) ||
-        getDateKey(createdAt) !== dateKey
-      ) {
-        return null;
-      }
-
-      return createdAt.getHours() * 60 + createdAt.getMinutes();
-    })
-    .filter(
-      (minutes) =>
-        minutes !== null &&
-        minutes >= checkupStart &&
-        minutes < closeTime
-    )
-    .sort((a, b) => a - b)[0];
-
-  if (firstBookingTime != null) {
-    queueStart = Math.max(checkupStart, firstBookingTime);
-  }
-
-  if (currentMinutes < queueStart) {
-    return {
-      ...emptyQueue,
-      peopleAhead: queue.length,
-      waiting: queue.length,
-      nextPatient: queue[0] || null,
-      estimatedWait: queue.length ? queueStart - currentMinutes : 0,
-    };
-  }
-
-  const calculatedIndex = Math.floor((currentMinutes - queueStart) / duration);
-
-  if (queue.length === 0 || calculatedIndex >= queue.length) {
-    return {
-      ...emptyQueue,
-      isStarted: true,
-      servingIndex: -1,
-      peopleAhead: 0,
-      waiting: 0,
-      serving: null,
-      nextPatient: null,
-      estimatedWait: 0,
-    };
-  }
-
-  const servingIndex = Math.max(0, calculatedIndex);
-  const serving = queue[servingIndex] || null;
-  const waiting = Math.max(0, queue.length - servingIndex - 1);
-
-  return {
-    ...emptyQueue,
-    peopleAhead: waiting,
-    waiting,
-    serving,
-    servingIndex,
-    isStarted: true,
-    nextPatient: queue[servingIndex + 1] || null,
-    estimatedWait: waiting * duration,
+    isStarted,
+    isFinished,
+    isSessionClosed: sessionState.isSessionClosed,
+    sessionState: sessionState.sessionState,
+    nextPatient: queue[0] || null,
+    estimatedWait: queue.length * duration,
   };
 }
+
 
 function normalizeSearchText(value) {
   return String(value || "")
@@ -850,11 +974,20 @@ export default function ClinicsPage() {
           cache: "no-store",
         });
 
-        if (!response.ok) {
-          throw new Error("Failed to fetch clinics");
-        }
+      const result = await response.json().catch(() => ({}));
 
-        const result = await response.json();
+if (!response.ok) {
+  console.error("Clinics API failed:", {
+    status: response.status,
+    response: result,
+  });
+
+  throw new Error(
+    result.error ||
+    result.message ||
+    `Clinics API failed with status ${response.status}`
+  );
+}
 
         if (
           !result.success ||
@@ -1000,53 +1133,54 @@ export default function ClinicsPage() {
                 )
               : [];
 
-            const doctorsWithStatus = doctors.map(
-              (doctor) => {
-                const doctorStatus = getDoctorStatus(
-                  doctor,
-                  currentTime
-                );
+          
+const doctorsWithStatus = doctors.map((doctor) => {
+  const doctorStatus = getDoctorStatus(
+    doctor,
+    currentTime
+  );
 
-                const activeSlot = doctorStatus.currentSlot;
+  const activeSlot = doctorStatus.currentSlot;
 
-                const slotQueues = getDoctorSlotQueues(
-                  doctor,
-                  currentTime
-                );
+  const slotQueues = getDoctorSlotQueues(
+    doctor,
+    currentTime
+  );
 
-                const activeQueueInfo = activeSlot
-                  ? calculateSlotQueue(
-                      doctor,
-                      activeSlot,
-                      currentTime
-                    )
-                  : {
-                      total: 0,
-                      capacity: 0,
-                      peopleAhead: 0,
-                      waiting: 0,
-                      serving: null,
-                      completed: 0,
-                      queue: [],
-                      servingIndex: -1,
-                      isStarted: false,
-                      isFinished: false,
-                      nextPatient: null,
-                      estimatedWait: 0,
-                    };
+  const activeQueueInfo = activeSlot
+    ? calculateSlotQueue(
+        doctor,
+        activeSlot,
+        currentTime
+      )
+    : {
+        total: 0,
+        capacity: 0,
+        peopleAhead: 0,
+        waiting: 0,
+        serving: null,
+        completed: 0,
+        queue: [],
+        servingIndex: -1,
+        isStarted: false,
+        isFinished: false,
+        isSessionClosed: false,
+        sessionState: "not-started",
+        nextPatient: null,
+        estimatedWait: 0,
+      };
 
-                return {
-                  ...doctor,
-                  id: getDoctorId(doctor),
-                  peopleAhead:
-                    activeQueueInfo.peopleAhead,
-                  activeSlot,
-                  activeQueueInfo,
-                  slotQueues,
-                  status: doctorStatus,
-                };
-              }
-            );
+  return {
+    ...doctor,
+    id: getDoctorId(doctor),
+    peopleAhead: activeQueueInfo.peopleAhead,
+    activeSlot,
+    activeQueueInfo,
+    slotQueues,
+    status: doctorStatus,
+  };
+});
+
 
             const clinicStatus = getClinicStatus(
               doctors,
@@ -1425,7 +1559,7 @@ className="flex h-12 w-full items-center gap-3 rounded-xl border border-gray-200
 
                     <Link
                       href={`/services/clinics/${clinic._id}`}
-                      className="inline-flex h-10 w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 text-xs font-bold text-white transition hover:bg-indigo-700 sm:w-auto"
+                      className="inline-flex h-10 w-full shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 text-xs font-bold text-white transition hover:bg-indigo-700 sm:w-auto active:scale-88"
                     >
                       View Doctors
                       <ChevronRight size={15} />
@@ -1497,22 +1631,31 @@ className="flex h-12 w-full items-center gap-3 rounded-xl border border-gray-200
                           {doctor.slotQueues?.length > 0 ? (
                             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                               {doctor.slotQueues.map(
-                                ({ slot, queueInfo }) => {
-                                  const isCurrentSlot =
-                                    doctor.activeSlot?.open ===
-                                      slot.open &&
-                                    doctor.activeSlot?.close ===
-                                      slot.close;
+  ({
+    slot,
+    queueInfo,
+    isSessionClosed,
+    sessionState,
+  }) => {
+    const isCurrentSlot =
+      doctor.activeSlot?.open === slot.open &&
+      doctor.activeSlot?.close === slot.close;
+
+    const slotUnavailable =
+      isSessionClosed ||
+      queueInfo.isFinished;
 
                                   return (
                                     <div
-                                      key={getSlotKey(slot)}
-                                      className={`min-w-0 rounded-xl border p-3 ${
-                                        isCurrentSlot
-                                          ? "border-green-200 bg-green-50/60"
-                                          : "border-gray-100 bg-gray-50/70"
-                                      }`}
-                                    >
+  key={getSlotKey(slot)}
+  className={`min-w-0 rounded-xl border p-3 ${
+    slotUnavailable
+      ? "border-red-200 bg-red-50/50"
+      : isCurrentSlot
+      ? "border-green-200 bg-green-50/60"
+      : "border-gray-100 bg-gray-50/70"
+  }`}
+>
                                       <div className="flex items-center justify-between gap-2">
                                         <div className="flex items-center gap-1.5">
                                           <Clock
@@ -1526,11 +1669,15 @@ className="flex h-12 w-full items-center gap-3 rounded-xl border border-gray-200
                                           </span>
                                         </div>
 
-                                        {isCurrentSlot && (
-                                          <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[8px] font-bold text-green-700">
-                                            NOW
-                                          </span>
-                                        )}
+                                      {slotUnavailable ? (
+  <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[8px] font-bold text-red-700">
+    {sessionState === "expired" ? "EXPIRED" : "CLOSED"}
+  </span>
+) : isCurrentSlot ? (
+  <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[8px] font-bold text-green-700">
+    NOW
+  </span>
+) : null}
                                       </div>
 
                                       <div className="mt-3 flex items-center justify-between gap-2">
@@ -1555,9 +1702,10 @@ className="flex h-12 w-full items-center gap-3 rounded-xl border border-gray-200
                                         </div>
 
                                         {isCurrentSlot &&
-                                          doctor.status?.isOpen &&
-                                          !doctor.status?.isHoliday &&
-                                          doctor.isEmergency !== true && (
+  !slotUnavailable &&
+  doctor.status?.isOpen &&
+  !doctor.status?.isHoliday &&
+  doctor.isEmergency !== true && (
                                             <Link
                                               href={`/services/clinics/${clinic._id}/emergency?doctor=${encodeURIComponent(
                                                 getDoctorId(doctor)
@@ -1570,26 +1718,6 @@ className="flex h-12 w-full items-center gap-3 rounded-xl border border-gray-200
                                           )}
                                       </div>
 
-                                      {isCurrentSlot &&
-                                        queueInfo.serving && (
-                                          <div className="mt-2 flex items-center gap-2 rounded-lg border border-green-100 bg-white/80 px-2 py-1.5">
-                                            <Activity
-                                              size={12}
-                                              className="text-green-600"
-                                            />
-
-                                            <p className="truncate text-[10px] text-green-700">
-                                              Serving:{" "}
-                                              {getPriorityRank(
-                                                queueInfo.serving
-                                              ) === 0
-                                                ? "Emergency Patient"
-                                                : queueInfo.serving
-                                                    ?.patient?.name ||
-                                                  "Patient"}
-                                            </p>
-                                          </div>
-                                        )}
                                     </div>
                                   );
                                 }

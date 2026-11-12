@@ -53,11 +53,7 @@ function normalizeId(value) {
 function normalizeDate(value) {
   if (!value) return "";
 
-  // Date-only strings must not be shifted by timezone conversion.
-  if (
-    typeof value === "string" &&
-    /^\d{4}-\d{2}-\d{2}$/.test(value)
-  ) {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return value;
   }
 
@@ -72,17 +68,14 @@ function normalizeDate(value) {
     day: "2-digit",
   }).formatToParts(date);
 
-  const part = (name) =>
-    parts.find((item) => item.type === name)?.value;
+  const part = (name) => parts.find((item) => item.type === name)?.value;
 
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
 function getBookingDate(booking) {
   return normalizeDate(
-    booking.date ??
-      booking.appointmentDate ??
-      booking.bookingDate
+    booking.date ?? booking.appointmentDate ?? booking.bookingDate
   );
 }
 
@@ -102,12 +95,9 @@ function getBookingSlot(booking) {
 
 function isCountable(booking) {
   const status = String(booking.status || "").toLowerCase();
-  const paymentStatus = String(
-    booking.paymentStatus || ""
-  ).toLowerCase();
+  const paymentStatus = String(booking.paymentStatus || "").toLowerCase();
 
   if (EXCLUDED_STATUSES.has(status)) return false;
-
   if (EXCLUDED_PAYMENTS.has(paymentStatus)) return false;
 
   return true;
@@ -115,7 +105,6 @@ function isCountable(booking) {
 
 function matchesId(value, expected) {
   const actualId = normalizeId(value);
-
   return actualId !== "" && actualId === String(expected);
 }
 
@@ -142,7 +131,6 @@ function idQuery(keys, value) {
   for (const key of keys) {
     alternatives.push({ [key]: String(value) });
 
-    // Support actual ObjectId fields when the supplied ID is one.
     if (ObjectId.isValid(String(value))) {
       alternatives.push({
         [key]: new ObjectId(String(value)),
@@ -172,9 +160,7 @@ export async function GET(request) {
     const clinicId = searchParams.get("clinicId")?.trim();
     const doctorId = searchParams.get("doctorId")?.trim();
     const date = searchParams.get("date")?.trim();
-    const category = (
-      searchParams.get("category") || "clinic"
-    )
+    const category = (searchParams.get("category") || "clinic")
       .trim()
       .toLowerCase();
 
@@ -182,8 +168,7 @@ export async function GET(request) {
       return json(
         {
           success: false,
-          message:
-            "clinicId, doctorId, and date are required.",
+          message: "clinicId, doctorId, and date are required.",
         },
         400
       );
@@ -212,7 +197,6 @@ export async function GET(request) {
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB);
 
-    // 1. Check doctor's holiday status before looking up bookings
     const teamCollection = db.collection("team");
     const doctorFilter = [];
 
@@ -244,7 +228,6 @@ export async function GET(request) {
       });
     }
 
-    // 2. Query bookings collection
     const bookingsCollection = db.collection("bookings");
 
     const clinicKeys = [
@@ -267,8 +250,6 @@ export async function GET(request) {
       ],
     };
 
-    // Category is optional in legacy booking records. When present,
-    // it must match the requested category.
     query.$and.push({
       $or: [
         { category },
@@ -315,8 +296,6 @@ export async function GET(request) {
       .map((booking) => {
         const slot = getBookingSlot(booking);
 
-        // Return only availability-related fields. Never expose
-        // patient names, email addresses, or phone numbers.
         return {
           id: String(booking._id),
           clinicId,

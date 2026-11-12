@@ -1,3 +1,4 @@
+
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
@@ -81,6 +82,7 @@ export const authOptions = {
             name: user.name,
             email: user.email,
             phone: user.phone || "",
+            role: user.role || "user",
 
             // LOCATION DETAILS
             location: user.address || user.locationName || "",
@@ -88,6 +90,7 @@ export const authOptions = {
             address: user.address || "",
             latitude: user.location?.latitude ?? user.latitude ?? null,
             longitude: user.location?.longitude ?? user.longitude ?? null,
+            webPushEnabled: user.webPushEnabled === true,
           };
         } catch (error) {
           console.error("Authentication error:", error);
@@ -131,19 +134,34 @@ export const authOptions = {
             user.name = existingUser.name;
             user.email = existingUser.email;
             user.phone = existingUser.phone || "";
+            user.role = existingUser.role || "user";
 
             // EXISTING USER LOCATION
-            user.location = existingUser.address || existingUser.locationName || "";
+            user.location =
+              existingUser.address ||
+              existingUser.locationName ||
+              "";
+user.webPushEnabled = existingUser.webPushEnabled === true;
             user.locationName = existingUser.locationName || "";
             user.address = existingUser.address || "";
+
             user.latitude =
               existingUser.location?.latitude ??
               existingUser.latitude ??
               null;
+
             user.longitude =
               existingUser.location?.longitude ??
               existingUser.longitude ??
               null;
+
+            // Save default role if missing, without changing existing roles
+            if (!existingUser.role) {
+              await users.updateOne(
+                { _id: existingUser._id },
+                { $set: { role: "user" } }
+              );
+            }
 
             return true;
           }
@@ -154,8 +172,9 @@ export const authOptions = {
             email,
             phone: "",
             password: null,
+            role: "user",
             isVerified: true,
-
+webPushEnabled: false,
             locationName: "",
             address: "",
             location: {
@@ -169,7 +188,8 @@ export const authOptions = {
           user.id = result.insertedId.toString();
           user.email = email;
           user.phone = "";
-
+          user.role = "user";
+user.webPushEnabled = false;
           user.location = "";
           user.locationName = "";
           user.address = "";
@@ -194,7 +214,11 @@ export const authOptions = {
         token.name = user.name;
         token.email = user.email;
         token.phone = user.phone || "";
+token.webPushEnabled = user.webPushEnabled === true;
+        // ROLE
+        token.role = user.role || "user";
 
+        // LOCATION
         token.location = user.location || "";
         token.locationName = user.locationName || "";
         token.address = user.address || "";
@@ -211,6 +235,9 @@ export const authOptions = {
         if (session.phone !== undefined) {
           token.phone = session.phone;
         }
+        if (session.webPushEnabled !== undefined) {
+  token.webPushEnabled = session.webPushEnabled === true;
+}
 
         if (session.locationName !== undefined) {
           token.locationName = session.locationName;
@@ -228,7 +255,7 @@ export const authOptions = {
           token.longitude = session.longitude;
         }
 
-        // Backward compatibility
+        // BACKWARD COMPATIBILITY
         if (session.location !== undefined) {
           token.location = session.location;
         } else if (
@@ -240,6 +267,7 @@ export const authOptions = {
         }
       }
 
+      // Do not allow client session updates to modify token.role
       return token;
     },
 
@@ -250,7 +278,11 @@ export const authOptions = {
         session.user.name = token.name;
         session.user.email = token.email;
         session.user.phone = token.phone || "";
+session.user.webPushEnabled = token.webPushEnabled === true;
+        // ROLE
+        session.user.role = token.role || "user";
 
+        // LOCATION
         session.user.location = token.location || "";
         session.user.locationName = token.locationName || "";
         session.user.address = token.address || "";

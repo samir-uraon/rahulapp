@@ -23,6 +23,7 @@ const getProfile = (user) => ({
   locationName: user.locationName || "",
   locationType: user.locationType || "",
   location: getLocation(user),
+  webPushEnabled:Boolean(user.webPushEnabled)
 });
 
 // =====================================================

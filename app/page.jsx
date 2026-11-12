@@ -9,11 +9,11 @@ import Hero from "@/components/Hero";
 import Services from "@/components/Services";
 import Footer from "@/components/Footer";
 import GoUpButton from "@/components/GoUpButton";
-
+ 
 export default async function HomePage() {
   const session = await getServerSession(authOptions);
 
-  if (!session) {
+  if (!session?.user || session.user.role !== "user") {
     redirect("/login");
   }
 
@@ -21,19 +21,13 @@ export default async function HomePage() {
 
   return (
     <main className="min-h-screen bg-gray-50">
-
       <Header user={user} />
-
       <Hero />
-
       <Services />
-
       <Footer />
-
       <LocationManager />
-      <GoUpButton/>
-
+      <GoUpButton />
+   
     </main>
   );
 }
-

@@ -1,3 +1,4 @@
+
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import clientPromise from "@/lib/mongodb";
@@ -51,7 +52,21 @@ function escapeRegex(value) {
 
 function toDate(value) {
   if (!value) return null;
-  const date = value instanceof Date ? value : new Date(value);
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === "object") {
+    if (value.$date) return toDate(value.$date);
+
+    if (typeof value.toDate === "function") {
+      return toDate(value.toDate());
+    }
+  }
+
+  const date = new Date(value);
+
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
@@ -69,6 +84,7 @@ function parseTime(value) {
   }
 
   const text = String(value).trim();
+
   if (!text) return null;
 
   if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {
@@ -90,13 +106,37 @@ function parseTime(value) {
 
   if (meridiem) {
     if (hours < 1 || hours > 12) return null;
+
     hours %= 12;
-    if (meridiem === "PM") hours += 12;
+
+    if (meridiem === "PM") {
+      hours += 12;
+    }
   } else if (hours > 23) {
     return null;
   }
 
   return hours * 60 + minutes;
+}
+
+function formatMinutesToTimeString(minutes) {
+  if (
+    minutes === null ||
+    minutes === undefined ||
+    !Number.isFinite(minutes)
+  ) {
+    return null;
+  }
+
+  const hrs24 = Math.floor(minutes / 60) % 24;
+  const mins = Math.floor(minutes % 60);
+
+  const meridiem = hrs24 >= 12 ? "PM" : "AM";
+  const hrs12 = hrs24 % 12 === 0 ? 12 : hrs24 % 12;
+
+  const pad = (n) => String(n).padStart(2, "0");
+
+  return `${pad(hrs12)}:${pad(mins)} ${meridiem}`;
 }
 
 function getIndiaDateKey(value) {
@@ -142,7 +182,9 @@ function getIndiaDateKey(value) {
   const month = getPart("month");
   const day = getPart("day");
 
-  return year && month && day ? `${year}-${month}-${day}` : null;
+  return year && month && day
+    ? `${year}-${month}-${day}`
+    : null;
 }
 
 function getIndiaMinutes(value = new Date()) {
@@ -182,6 +224,7 @@ function makeIndiaDate(dateKey, minutes) {
   }
 
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey));
+
   if (!match) return null;
 
   const year = Number(match[1]);
@@ -189,7 +232,8 @@ function makeIndiaDate(dateKey, minutes) {
   const day = Number(match[3]);
 
   return new Date(
-    Date.UTC(year, month - 1, day, 0, Number(minutes)) - 330 * 60 * 1000
+    Date.UTC(year, month - 1, day, 0, Number(minutes)) -
+      330 * 60 * 1000
   );
 }
 
@@ -215,7 +259,7 @@ function getBookingSlot(booking) {
     {};
 
   if (typeof raw === "string") {
-    const match = raw.match(/(.+?)\s+-\s+(.+)/);
+    const match = raw.match(/(.+?)\s*-\s*(.+)/);
 
     return {
       open: match ? match[1].trim() : raw.trim(),
@@ -231,6 +275,7 @@ function getBookingSlot(booking) {
 
   return {
     ...slot,
+
     open:
       slot.open ||
       slot.start ||
@@ -238,6 +283,7 @@ function getBookingSlot(booking) {
       booking.slotOpen ||
       booking.slotStart ||
       null,
+
     close:
       slot.close ||
       slot.end ||
@@ -245,6 +291,7 @@ function getBookingSlot(booking) {
       booking.slotClose ||
       booking.slotEnd ||
       null,
+
     checkupStartTime:
       slot.checkupStartTime ||
       booking.checkupStartTime ||
@@ -268,39 +315,53 @@ function getBookingTime(booking) {
 
   for (const value of values) {
     const minutes = parseTime(value);
+
     if (minutes !== null) return minutes;
   }
 
   return null;
 }
 
-function getCheckupStartTime(booking, doctor) {
+function getDoctorSchedule(booking, doctor) {
+  return (
+    doctor?.schedule ||
+    doctor?.weeklySchedule ||
+    booking?.doctor?.schedule ||
+    booking?.doctorSchedule ||
+    {}
+  );
+}
+
+function getCheckupStartTime(booking, doctor, sessionInfo = null) {
   const slot = getBookingSlot(booking);
+
   const dateKey = getIndiaDateKey(getBookingDate(booking));
 
   if (dateKey) {
     const [year, month, day] = dateKey.split("-").map(Number);
+
     const dayKey =
       DAY_NAMES[
         new Date(Date.UTC(year, month - 1, day)).getUTCDay()
       ];
 
-    const scheduleSlots = Array.isArray(
-      doctor?.schedule?.[dayKey]?.slots
-    )
-      ? doctor.schedule[dayKey].slots
+    const schedule = getDoctorSchedule(booking, doctor);
+
+    const scheduleSlots = Array.isArray(schedule?.[dayKey]?.slots)
+      ? schedule[dayKey].slots
       : [];
 
-    const slotOpen = parseTime(slot.open);
-    const slotClose = parseTime(slot.close);
+    const slotOpen = parseTime(
+      sessionInfo?.slotOpen || slot.open
+    );
+
+    const slotClose = parseTime(
+      sessionInfo?.slotClose || slot.close
+    );
 
     const configuredSlot = scheduleSlots.find((item) => {
-      const open = parseTime(
-        item.open || item.start || item.startTime
-      );
-      const close = parseTime(
-        item.close || item.end || item.endTime
-      );
+      const open = parseTime(item.open || item.start || item.startTime);
+      const close = parseTime(item.close || item.end || item.endTime);
 
       return (
         open !== null &&
@@ -314,7 +375,9 @@ function getCheckupStartTime(booking, doctor) {
       configuredSlot?.checkupStartTime
     );
 
-    if (configuredStart !== null) return configuredStart;
+    if (configuredStart !== null) {
+      return configuredStart;
+    }
   }
 
   const values = [
@@ -328,24 +391,11 @@ function getCheckupStartTime(booking, doctor) {
 
   for (const value of values) {
     const minutes = parseTime(value);
+
     if (minutes !== null) return minutes;
   }
 
   return null;
-}
-
-function getStartMinutes(booking, doctor) {
-  const bookingMinutes = getBookingTime(booking);
-  const checkupMinutes = getCheckupStartTime(booking, doctor);
-
-  if (bookingMinutes === null && checkupMinutes === null) {
-    return null;
-  }
-
-  if (bookingMinutes === null) return checkupMinutes;
-  if (checkupMinutes === null) return bookingMinutes;
-
-  return Math.max(bookingMinutes, checkupMinutes);
 }
 
 function getDuration(booking, doctor) {
@@ -364,7 +414,9 @@ function getDuration(booking, doctor) {
     if (value === null || value === undefined || value === "") {
       continue;
     }
+
     const duration = Number(value);
+
     if (Number.isFinite(duration) && duration > 0) {
       return duration;
     }
@@ -380,9 +432,9 @@ function getPriority(booking) {
 
   const patientType = String(
     booking.patientType ||
-      booking.patient?.type ||
-      booking.patient?.patientType ||
-      ""
+    booking.patient?.type ||
+    booking.patient?.patientType ||
+    ""
   )
     .trim()
     .toLowerCase();
@@ -405,8 +457,8 @@ function getPriority(booking) {
 function getSequence(booking) {
   const value = Number(
     booking.sequence ??
-      booking.tokenNumber ??
-      booking.token?.number
+    booking.tokenNumber ??
+    booking.token?.number
   );
 
   return Number.isFinite(value) && value > 0
@@ -422,30 +474,20 @@ function getCreatedTime(booking) {
 function getBookingId(booking) {
   return String(
     booking._id ||
-      booking.bookingId ||
-      booking.bookingReference ||
-      booking.paymentId ||
-      ""
+    booking.bookingId ||
+    booking.bookingReference ||
+    booking.paymentId ||
+    ""
   );
-}
-
-function getBookingIdentifiers(booking) {
-  return [
-    booking?._id,
-    booking?.bookingId,
-    booking?.bookingReference,
-    booking?.paymentId,
-  ]
-    .filter(Boolean)
-    .map(String);
 }
 
 function getCancellationInfo(booking) {
   const rawCancelledBy = String(
     booking.cancelledBy ||
-      booking.cancellationBy ||
-      booking.cancellationReason ||
-      ""
+    booking.cancellationBy ||
+    booking.canceledBy ||
+    booking.cancellationReason ||
+    ""
   )
     .trim()
     .toLowerCase();
@@ -453,12 +495,17 @@ function getCancellationInfo(booking) {
   let cancelledBy = null;
 
   if (
-    rawCancelledBy.includes("doctor") ||
+    booking.byStaff === true ||
+    booking.bystaff === true ||
     rawCancelledBy.includes("staff")
   ) {
-    cancelledBy = rawCancelledBy.includes("staff")
-      ? "staff"
-      : "doctor";
+    cancelledBy = "staff";
+  } else if (
+    booking.byDoctor === true ||
+    booking.bydoctor === true ||
+    rawCancelledBy.includes("doctor")
+  ) {
+    cancelledBy = "doctor";
   } else if (
     rawCancelledBy.includes("patient") ||
     rawCancelledBy.includes("user")
@@ -470,37 +517,57 @@ function getCancellationInfo(booking) {
 
   return {
     cancelledBy: status === "cancelled" ? cancelledBy : null,
+
     cancellationReason:
       status === "cancelled"
         ? booking.cancellationReason || null
         : null,
+
     cancelledAt:
       status === "cancelled"
-        ? booking.cancelledAt || null
+        ? toDate(
+            booking.cancelledAt || booking.canceledAt
+          )?.toISOString() || null
         : null,
-    refundStatus: booking.refundStatus ?? booking.payment?.refundStatus ?? null,
-    refundId: booking.refundId ?? booking.payment?.refundId ?? null,
-    refundAmount: booking.refundAmount ?? booking.payment?.refundAmount ?? null,
-    refundInitiatedAt: booking.refundInitiatedAt ?? null,
-    refundExpectedDays: booking.refundExpectedDays ?? null,
+
+    refundStatus:
+      booking.refundStatus ??
+      booking.payment?.refundStatus ??
+      null,
+
+    refundId:
+      booking.refundId ??
+      booking.payment?.refundId ??
+      null,
+
+    refundAmount:
+      booking.refundAmount ??
+      booking.payment?.refundAmount ??
+      null,
+
+    refundInitiatedAt:
+      toDate(booking.refundInitiatedAt)?.toISOString() || null,
+
+    refundExpectedDays:
+      booking.refundExpectedDays ?? null,
   };
 }
 
 function getClinicId(booking) {
   return String(
     booking.clinicId ||
-      booking.clinic?._id ||
-      booking.clinic?.id ||
-      ""
+    booking.clinic?._id ||
+    booking.clinic?.id ||
+    ""
   );
 }
 
 function getDoctorId(booking) {
   return String(
     booking.doctorId ||
-      booking.doctor?._id ||
-      booking.doctor?.id ||
-      ""
+    booking.doctor?._id ||
+    booking.doctor?.id ||
+    ""
   );
 }
 
@@ -513,19 +580,23 @@ function compareBookings(a, b) {
   }
 
   const priorityDifference = getPriority(a) - getPriority(b);
-  if (priorityDifference !== 0) return priorityDifference;
+
+  if (priorityDifference !== 0) {
+    return priorityDifference;
+  }
 
   const sequenceDifference = getSequence(a) - getSequence(b);
-  if (sequenceDifference !== 0) return sequenceDifference;
+
+  if (sequenceDifference !== 0) {
+    return sequenceDifference;
+  }
 
   return getCreatedTime(a) - getCreatedTime(b);
 }
 
-function sameDoctorAndClinic(a, b) {
+function sameDoctor(a, b) {
   return (
-    getClinicId(a) !== "" &&
     getDoctorId(a) !== "" &&
-    getClinicId(a) === getClinicId(b) &&
     getDoctorId(a) === getDoctorId(b)
   );
 }
@@ -563,128 +634,160 @@ function deduplicateBookings(bookings) {
       toDate(booking.updatedAt || booking.createdAt)?.getTime() || 0;
 
     if (incomingUpdated > existingUpdated) {
-      unique.set(key, {
-        ...existing,
-        ...booking,
-        cancelledBy: booking.cancelledBy ?? existing.cancelledBy,
-        cancellationBy: booking.cancellationBy ?? existing.cancellationBy,
-        cancellationReason:
-          booking.cancellationReason ?? existing.cancellationReason,
-        cancelledAt: booking.cancelledAt ?? existing.cancelledAt,
-        refundStatus: booking.refundStatus ?? existing.refundStatus,
-        refundId: booking.refundId ?? existing.refundId,
-        refundAmount: booking.refundAmount ?? existing.refundAmount,
-        refundInitiatedAt:
-          booking.refundInitiatedAt ?? existing.refundInitiatedAt,
-        refundExpectedDays:
-          booking.refundExpectedDays ?? existing.refundExpectedDays,
-      });
-    } else {
-      const current = unique.get(key);
-
-      unique.set(key, {
-        ...booking,
-        ...current,
-        cancelledBy: current.cancelledBy ?? booking.cancelledBy,
-        cancellationBy: current.cancellationBy ?? booking.cancellationBy,
-        cancellationReason:
-          current.cancellationReason ?? booking.cancellationReason,
-        cancelledAt: current.cancelledAt ?? booking.cancelledAt,
-        refundStatus: current.refundStatus ?? booking.refundStatus,
-        refundId: current.refundId ?? booking.refundId,
-        refundAmount: current.refundAmount ?? booking.refundAmount,
-        refundInitiatedAt:
-          current.refundInitiatedAt ?? booking.refundInitiatedAt,
-        refundExpectedDays:
-          current.refundExpectedDays ?? booking.refundExpectedDays,
-      });
+      unique.set(key, { ...existing, ...booking });
     }
   }
 
   return [...unique.values()];
 }
 
-function getScheduledBaseMinutes(booking, doctor) {
-  const dateKey = getIndiaDateKey(getBookingDate(booking));
+function getScheduledBaseMinutes(booking, doctor, sessionInfo = null) {
   const slot = getBookingSlot(booking);
 
-  const slotOpen = parseTime(slot.open);
-  const checkupStart = getCheckupStartTime(booking, doctor);
+  const slotOpen = parseTime(
+    sessionInfo?.slotOpen || slot.open
+  );
 
-  let baseMinutes = getStartMinutes(booking, doctor);
+  const checkupStart = getCheckupStartTime(
+    booking,
+    doctor,
+    sessionInfo
+  );
 
-  if (slotOpen !== null) {
-    baseMinutes =
-      baseMinutes === null ? slotOpen : Math.max(baseMinutes, slotOpen);
-  }
+  const bookingMinutes = getBookingTime(booking);
 
-  if (checkupStart !== null) {
-    baseMinutes =
-      baseMinutes === null
-        ? checkupStart
-        : Math.max(baseMinutes, checkupStart);
-  }
+  const values = [
+    slotOpen,
+    checkupStart,
+    bookingMinutes,
+  ].filter((value) => value !== null);
 
-  const createdAt = toDate(booking.createdAt);
-
-  if (
-    createdAt &&
-    dateKey &&
-    getIndiaDateKey(createdAt) === dateKey
-  ) {
-    const createdMinutes = getIndiaMinutes(createdAt);
-
-    if (createdMinutes !== null) {
-      baseMinutes =
-        baseMinutes === null
-          ? createdMinutes
-          : Math.max(baseMinutes, createdMinutes);
-    }
-  }
-
-  return baseMinutes;
+  return values.length > 0 ? Math.max(...values) : null;
 }
 
-function calculateQueueInfo(booking, queuePool, doctor, now) {
+// Patient-specific serving start. Never use teamSession.startedAt here.
+function getActualSessionStart(booking) {
+  const values = [
+    booking.sessionStartedAt,
+    booking.servingStartedAt,
+    booking.startedAt,
+    booking.appointment?.sessionStartedAt,
+    booking.appointment?.startedAt,
+  ];
+
+  for (const value of values) {
+    const date = toDate(value);
+
+    if (date) return date;
+  }
+
+  return null;
+}
+
+// Doctor's team session start.
+function getTeamSessionStartedAt(sessionInfo) {
+  return toDate(sessionInfo?.startedAt);
+}
+
+function makeSessionKey(doctorId, dateKey, slotOpen, sessionId = null) {
+  const sessionOpen =
+    parseTime(slotOpen) !== null
+      ? String(parseTime(slotOpen))
+      : String(
+          slotOpen ||
+          String(sessionId || "").split("-")[0] ||
+          ""
+        ).trim().toLowerCase();
+
+  return [
+    String(doctorId || ""),
+    String(dateKey || ""),
+    sessionOpen,
+  ].join("|");
+}
+
+function calculateQueueInfo(
+  booking,
+  queuePool,
+  doctor,
+  now,
+  sessionInfo = null,
+  sessionByPair = new Map()
+) {
   const status = normalizeStatus(booking.status);
-  const dateKey = getIndiaDateKey(getBookingDate(booking));
-  const todayKey = getIndiaDateKey(now);
-  const currentMinutes = getIndiaMinutes(now);
+
+  const dateKey = getIndiaDateKey(
+    getBookingDate(booking)
+  );
 
   const activeBookings = queuePool
     .filter(
       (item) =>
         isActive(item.status) &&
         getIndiaDateKey(getBookingDate(item)) === dateKey &&
-        sameDoctorAndClinic(item, booking)
+        sameDoctor(item, booking)
     )
     .sort(compareBookings);
 
   const timeline = [];
+
   let previousEndMinutes = null;
 
   for (const item of activeBookings) {
-    const itemBaseMinutes = getScheduledBaseMinutes(item, doctor);
+    const itemDateKey = getIndiaDateKey(
+      getBookingDate(item)
+    );
+
+    const itemSlot = getBookingSlot(item);
+
+    const itemSessionKey = makeSessionKey(
+      getDoctorId(item),
+      itemDateKey,
+      itemSlot.open,
+      `${itemSlot.open || ""}-${itemSlot.close || ""}`
+    );
+
+    const itemSessionInfo =
+      sessionByPair.get(itemSessionKey) || null;
+
+    const itemDoctor = item.doctor || doctor;
+
+    const itemBaseMinutes = getScheduledBaseMinutes(
+      item,
+      itemDoctor,
+      itemSessionInfo
+    );
 
     let startMinutes =
       itemBaseMinutes ??
       previousEndMinutes ??
-      currentMinutes ??
+      getIndiaMinutes(now) ??
       0;
 
-    if (
-      isServing(item.status) &&
-      dateKey === todayKey &&
-      currentMinutes !== null
-    ) {
-      startMinutes = Math.max(startMinutes, currentMinutes);
+    if (isServing(item.status)) {
+      const actualStart = getActualSessionStart(item);
+
+      if (
+        actualStart &&
+        getIndiaDateKey(actualStart) === itemDateKey
+      ) {
+        const actualStartMinutes = getIndiaMinutes(actualStart);
+
+        if (actualStartMinutes !== null) {
+          startMinutes = actualStartMinutes;
+        }
+      }
     }
 
     if (previousEndMinutes !== null) {
-      startMinutes = Math.max(startMinutes, previousEndMinutes);
+      startMinutes = Math.max(
+        startMinutes,
+        previousEndMinutes
+      );
     }
 
-    const itemDuration = getDuration(item, doctor);
+    const itemDuration = getDuration(item, itemDoctor);
+
     const endMinutes = startMinutes + itemDuration;
 
     timeline.push({
@@ -707,15 +810,19 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
   if (ownIndex < 0 && booking.bookingReference) {
     ownIndex = timeline.findIndex(
       (item) =>
-        item.booking.bookingReference &&
-        String(item.booking.bookingReference) ===
-          String(booking.bookingReference)
+        String(item.booking.bookingReference || "") ===
+        String(booking.bookingReference)
     );
   }
 
-  const ownTimeline = ownIndex >= 0 ? timeline[ownIndex] : null;
+  const ownTimeline =
+    ownIndex >= 0 ? timeline[ownIndex] : null;
 
-  const ownBaseMinutes = getScheduledBaseMinutes(booking, doctor);
+  const ownBaseMinutes = getScheduledBaseMinutes(
+    booking,
+    doctor,
+    sessionInfo
+  );
 
   let peopleAhead = 0;
   let expectedStartMinutes = ownBaseMinutes;
@@ -724,13 +831,13 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
   if (isActive(status)) {
     if (ownTimeline) {
       peopleAhead = ownIndex;
-      expectedStartMinutes = ownTimeline.startMinutes;
 
-      const waitBase = ownBaseMinutes ?? ownTimeline.startMinutes;
+      expectedStartMinutes = ownTimeline.startMinutes;
 
       estimatedWaitMinutes = Math.max(
         0,
-        ownTimeline.startMinutes - waitBase
+        ownTimeline.startMinutes -
+          (ownBaseMinutes ?? ownTimeline.startMinutes)
       );
     } else {
       peopleAhead = timeline.length;
@@ -748,24 +855,45 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
       }
 
       estimatedWaitMinutes =
-        expectedStartMinutes !== null && ownBaseMinutes !== null
-          ? Math.max(0, expectedStartMinutes - ownBaseMinutes)
+        expectedStartMinutes !== null &&
+        ownBaseMinutes !== null
+          ? Math.max(
+              0,
+              expectedStartMinutes - ownBaseMinutes
+            )
           : 0;
     }
   }
 
   let expectedTurnAt = null;
 
-  if (
-    dateKey &&
-    expectedStartMinutes !== null &&
-    expectedStartMinutes !== undefined
-  ) {
-    if (isServing(status) && dateKey === todayKey) {
-      expectedTurnAt = now;
-    } else {
-      expectedTurnAt = makeIndiaDate(dateKey, expectedStartMinutes);
+  if (dateKey && isServing(status)) {
+    const actualStart = getActualSessionStart(booking);
+
+    if (actualStart) {
+      expectedTurnAt = actualStart.toISOString();
+    } else if (expectedStartMinutes !== null) {
+      const turnDate = makeIndiaDate(
+        dateKey,
+        expectedStartMinutes
+      );
+
+      expectedTurnAt = turnDate
+        ? turnDate.toISOString()
+        : null;
     }
+  } else if (
+    dateKey &&
+    expectedStartMinutes !== null
+  ) {
+    const turnDate = makeIndiaDate(
+      dateKey,
+      expectedStartMinutes
+    );
+
+    expectedTurnAt = turnDate
+      ? turnDate.toISOString()
+      : null;
   }
 
   return {
@@ -777,61 +905,165 @@ function calculateQueueInfo(booking, queuePool, doctor, now) {
   };
 }
 
-function serializeBooking(booking, clinic, doctor, queueInfo) {
-  const expectedTurnAt =
-    queueInfo.expectedTurnAt ??
-    booking.expectedTurnAt ??
-    booking.queue?.expectedTurnAt ??
-    null;
+function serializeBooking(
+  booking,
+  sessionInfo,
+  doctor,
+  queueInfo
+) {
+  const slotRaw = getBookingSlot(booking);
 
-  const latitude =
-    booking.latitude ??
-    booking.lat ??
-    booking.location?.latitude ??
-    booking.location?.lat ??
-    clinic?.latitude ??
-    clinic?.lat ??
-    clinic?.location?.latitude ??
-    clinic?.location?.lat ??
-    null;
+  const dateKey = getIndiaDateKey(
+    getBookingDate(booking)
+  );
 
-  const longitude =
-    booking.longitude ??
-    booking.lng ??
-    booking.location?.longitude ??
-    booking.location?.lng ??
-    clinic?.longitude ??
-    clinic?.lng ??
-    clinic?.location?.longitude ??
-    clinic?.location?.lng ??
-    null;
+  const checkupStartMinutes = getCheckupStartTime(
+    booking,
+    doctor,
+    sessionInfo
+  );
+
+  // Prefer the actual teamSession slot.
+  const actualSlotOpen =
+    sessionInfo?.slotOpen || slotRaw.open;
+
+  const actualSlotClose =
+    sessionInfo?.slotClose || slotRaw.close;
+
+  const slotOpenMinutes = parseTime(actualSlotOpen);
+  const slotCloseMinutes = parseTime(actualSlotClose);
+
+  const slot = {
+    open:
+      formatMinutesToTimeString(slotOpenMinutes) ||
+      actualSlotOpen ||
+      null,
+
+    close:
+      formatMinutesToTimeString(slotCloseMinutes) ||
+      actualSlotClose ||
+      null,
+
+    checkupStartTime:
+      formatMinutesToTimeString(checkupStartMinutes) ||
+      slotRaw.checkupStartTime ||
+      null,
+  };
+
+  const bookingTimeMinutes = getBookingTime(booking);
+
+  const bookingTime =
+    formatMinutesToTimeString(bookingTimeMinutes) ||
+    booking.bookingTime ||
+    slot.open;
 
   const cancellationInfo = getCancellationInfo(booking);
 
-  const originalPaymentAmount =
+  const originalPaymentAmount = Number(
     booking.originalPaymentAmount ??
     booking.paymentAmount ??
     booking.amount ??
     booking.payment?.originalAmount ??
     booking.payment?.amount ??
+    0
+  );
+
+  const paymentAmount = Number(
+    booking.paymentAmount ?? originalPaymentAmount ?? 0
+  );
+
+  const sequence = getSequence(booking);
+
+  const sequenceNum =
+    sequence === Number.MAX_SAFE_INTEGER ? 1 : sequence;
+
+  const tokenNumber =
+    booking.tokenNumber ||
+    booking.token?.number ||
+    `A${String(sequenceNum).padStart(3, "0")}`;
+
+  const actualPatientStartedAt = getActualSessionStart(booking);
+
+  const teamSessionStartedAt =
+    getTeamSessionStartedAt(sessionInfo);
+
+  const latitude =
+    booking.lat ??
+    booking.latitude ??
+    booking.location?.lat ??
+    booking.location?.latitude ??
     null;
 
+  const longitude =
+    booking.lng ??
+    booking.longitude ??
+    booking.location?.lng ??
+    booking.location?.longitude ??
+    null;
+
+  let createdAtDate = toDate(
+    booking.createdAt ||
+    booking.created_at ||
+    booking.bookedAt ||
+    booking.bookingCreatedAt
+  );
+
+  if (!createdAtDate && booking._id) {
+    const idStr = String(booking._id);
+
+    if (/^[0-9a-fA-F]{24}$/.test(idStr)) {
+      createdAtDate = new Date(
+        parseInt(idStr.substring(0, 8), 16) * 1000
+      );
+    }
+  }
+
+  const createdAt = createdAtDate
+    ? createdAtDate.toISOString()
+    : null;
+
+  const updatedAt =
+    toDate(booking.updatedAt || booking.updated_at)?.toISOString() ||
+    createdAt;
+
+  const rescheduledAt =
+    toDate(booking.rescheduledAt)?.toISOString() || null;
+
+  const isByDoctor =
+    booking.byDoctor === true ||
+    booking.bydoctor === true;
+
+  const isByStaff =
+    booking.byStaff === true ||
+    booking.bystaff === true;
+
   return {
-    ...booking,
+    _id: String(booking._id),
 
-    _id: booking._id ? String(booking._id) : null,
+    bookingReference:
+      booking.bookingReference ||
+      booking.bookingId ||
+      `REF-${String(booking._id).slice(-8).toUpperCase()}`,
 
-    clinicId: getClinicId(booking) || String(clinic?._id || ""),
+    userId: String(
+      booking.userId || booking.user || ""
+    ),
 
-    doctorId:
-      getDoctorId(booking) || String(doctor?._id || doctor?.id || ""),
+    createdAt,
+    updatedAt,
+    rescheduledAt,
+    bookedAt: createdAt,
+
+    clinicId: getClinicId(booking),
 
     clinicName:
       booking.clinicName ||
-      clinic?.name ||
-      clinic?.clinicName ||
       booking.clinic?.name ||
       "Clinic",
+
+    doctorId:
+      getDoctorId(booking) ||
+      String(doctor?._id || doctor?.id || ""),
 
     doctorName:
       booking.doctorName ||
@@ -840,61 +1072,134 @@ function serializeBooking(booking, clinic, doctor, queueInfo) {
       booking.doctor?.name ||
       "Doctor",
 
+    bookingDate: dateKey,
+
+    slot,
+    bookingTime,
+
+    sequence: sequenceNum,
+    tokenNumber,
+
+    status: normalizeStatus(booking.status),
+
+    byDoctor: isByDoctor,
+    bydoctor: isByDoctor,
+    byStaff: isByStaff,
+    bystaff: isByStaff,
+
+    priority: String(
+      booking.priority || "normal"
+    ).toLowerCase(),
+
+    patient: booking.patient || {},
+
+    patientType: String(
+      booking.patientType ||
+      booking.patient?.type ||
+      "self"
+    ).toLowerCase(),
+
+    duration: queueInfo.duration,
+
+    paymentAmount,
+    originalPaymentAmount,
+
+    paymentStatus: booking.paymentStatus || "paid",
+
+    // Actual teamSessions document information
+    sessionStatus: sessionInfo?.status || null,
+
+    sessionId: sessionInfo?.sessionId || null,
+
+    sessionLabel: sessionInfo?.sessionLabel || null,
+
+    sessionStartedAt: teamSessionStartedAt
+      ? teamSessionStartedAt.toISOString()
+      : null,
+
+    sessionCreatedAt:
+      toDate(sessionInfo?.createdAt)?.toISOString() || null,
+
+    sessionExpiresAt:
+      toDate(sessionInfo?.expiresAt)?.toISOString() || null,
+
+    sessionSlot: {
+      open: sessionInfo?.slotOpen || null,
+      close: sessionInfo?.slotClose || null,
+    },
+
+    sessionCancelled: sessionInfo?.cancel === true,
+
+    // Patient-specific serving information
+    patientStartedAt: actualPatientStartedAt
+      ? actualPatientStartedAt.toISOString()
+      : null,
+
+    peopleAhead: queueInfo.peopleAhead,
+
+    expectedTurnAt: queueInfo.expectedTurnAt,
+
     lat:
-      latitude !== null && latitude !== ""
+      latitude !== null
         ? Number(latitude)
         : null,
 
     lng:
-      longitude !== null && longitude !== ""
+      longitude !== null
         ? Number(longitude)
         : null,
 
-    status: normalizeStatus(booking.status),
-
-    paymentAmount: originalPaymentAmount,
-    originalPaymentAmount: originalPaymentAmount,
-    paymentStatus: booking.paymentStatus || null,
-
     cancelledBy: cancellationInfo.cancelledBy,
-    cancellationReason: cancellationInfo.cancellationReason,
+
+    cancellationReason:
+      cancellationInfo.cancellationReason,
+
     cancelledAt: cancellationInfo.cancelledAt,
 
     refundStatus: cancellationInfo.refundStatus,
+
     refundId: cancellationInfo.refundId,
+
     refundAmount: cancellationInfo.refundAmount,
-    refundInitiatedAt: cancellationInfo.refundInitiatedAt,
-    refundExpectedDays: cancellationInfo.refundExpectedDays,
 
-    peopleAhead: queueInfo.peopleAhead,
-    estimatedWaitMinutes: queueInfo.estimatedWaitMinutes,
-    duration: queueInfo.duration,
-    expectedTurnAt,
+    refundInitiatedAt:
+      cancellationInfo.refundInitiatedAt,
 
-    queue: {
-      ...(booking.queue || {}),
-      peopleAhead: queueInfo.peopleAhead,
-      estimatedWaitMinutes: queueInfo.estimatedWaitMinutes,
-      expectedTurnAt,
-      duration: queueInfo.duration,
-      startMinutes: queueInfo.startMinutes,
-    },
+    refundExpectedDays:
+      cancellationInfo.refundExpectedDays,
   };
 }
 
 function buildUserQuery(token) {
   const clauses = [];
 
-  const tokenId = String(token.id || token.sub || "").trim();
-  const subject = String(token.sub || "").trim();
-  const email = String(token.email || "").trim().toLowerCase();
+  const tokenId = String(
+    token.id || token.sub || ""
+  ).trim();
 
-  for (const id of new Set([tokenId, subject].filter(Boolean))) {
-    clauses.push({ userId: id }, { user: id });
+  const subject = String(
+    token.sub || ""
+  ).trim();
+
+  const email = String(
+    token.email || ""
+  ).trim().toLowerCase();
+
+  for (const id of new Set(
+    [tokenId, subject].filter(Boolean)
+  )) {
+    clauses.push(
+      { userId: id },
+      { user: id }
+    );
 
     if (ObjectId.isValid(id) && id.length === 24) {
       const objectId = new ObjectId(id);
-      clauses.push({ userId: objectId }, { user: objectId });
+
+      clauses.push(
+        { userId: objectId },
+        { user: objectId }
+      );
     }
   }
 
@@ -915,28 +1220,11 @@ function buildUserQuery(token) {
   return clauses;
 }
 
-function getDoctorFromClinic(clinic, doctorId) {
-  if (!clinic || !doctorId) return null;
-
-  for (const key of ["doctors", "doctorList", "staff"]) {
-    const list = Array.isArray(clinic[key]) ? clinic[key] : [];
-
-    const doctor = list.find(
-      (item) =>
-        String(item?._id || item?.id || item?.doctorId || "") ===
-        String(doctorId)
-    );
-
-    if (doctor) return doctor;
-  }
-
-  return null;
-}
-
 function addIdCandidates(values, id) {
   if (!id) return;
 
   const text = String(id);
+
   values.add(text);
 
   if (ObjectId.isValid(text) && text.length === 24) {
@@ -947,7 +1235,8 @@ function addIdCandidates(values, id) {
 export async function GET(request) {
   try {
     const secret =
-      process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+      process.env.AUTH_SECRET ||
+      process.env.NEXTAUTH_SECRET;
 
     if (!secret) {
       return NextResponse.json(
@@ -988,7 +1277,9 @@ export async function GET(request) {
     const db = client.db(process.env.MONGODB);
 
     const bookingsCollection = db.collection("bookings");
-    const clinicsCollection = db.collection("clinics");
+
+    // Collection name is teamSessions (plural)
+    const teamSessionsCollection = db.collection("teamSessions");
 
     const userQuery = buildUserQuery(token);
 
@@ -1002,6 +1293,7 @@ export async function GET(request) {
       );
     }
 
+    // 1. Fetch patient's bookings
     const bookingDocuments = await bookingsCollection
       .find({
         $or: userQuery,
@@ -1016,62 +1308,95 @@ export async function GET(request) {
       });
     }
 
-    const clinics = await clinicsCollection.find({}).toArray();
-
-    const clinicById = new Map();
-    const doctorByPair = new Map();
-
-    for (const clinic of clinics) {
-      if (!clinic?._id) continue;
-
-      const clinicId = String(clinic._id);
-      clinicById.set(clinicId, clinic);
-
-      const doctors = [
-        ...(Array.isArray(clinic.doctors) ? clinic.doctors : []),
-        ...(Array.isArray(clinic.doctorList) ? clinic.doctorList : []),
-        ...(Array.isArray(clinic.staff) ? clinic.staff : []),
-      ];
-
-      for (const doctor of doctors) {
-        if (!doctor || typeof doctor !== "object") continue;
-
-        const doctorId = String(
-          doctor._id || doctor.id || doctor.doctorId || ""
-        );
-
-        if (doctorId) {
-          doctorByPair.set(`${clinicId}|${doctorId}`, doctor);
-        }
-      }
-    }
-
-    const clinicDoctorPairs = new Map();
+    // 2. Fetch matching teamSessions
+    const sessionConditions = [];
 
     for (const booking of bookingDocuments) {
-      const clinicId = getClinicId(booking);
       const doctorId = getDoctorId(booking);
 
-      if (clinicId && doctorId) {
-        clinicDoctorPairs.set(`${clinicId}|${doctorId}`, {
-          clinicId,
-          doctorId,
-        });
+      const dateKey = getIndiaDateKey(
+        getBookingDate(booking)
+      );
+
+      if (!doctorId || !dateKey) continue;
+
+      const doctorCandidates = new Set();
+
+      addIdCandidates(doctorCandidates, doctorId);
+
+      sessionConditions.push({
+        doctorId: {
+          $in: [...doctorCandidates],
+        },
+        date: dateKey,
+      });
+    }
+
+    const teamSessions = sessionConditions.length
+      ? await teamSessionsCollection
+          .find({
+            $or: sessionConditions,
+          })
+          .sort({
+            updatedAt: -1,
+            createdAt: -1,
+          })
+          .toArray()
+      : [];
+
+    // Match sessions using doctorId + date + slotOpen
+    const sessionByPair = new Map();
+
+    for (const session of teamSessions) {
+      if (!session?.doctorId || !session?.date) {
+        continue;
+      }
+
+      const key = makeSessionKey(
+        session.doctorId,
+        session.date,
+        session.slotOpen,
+        session.sessionId
+      );
+
+      const existing = sessionByPair.get(key);
+
+      const sessionIsActive =
+        String(session.status || "").toLowerCase() === "active" &&
+        session.cancel !== true;
+
+      const existingIsActive =
+        String(existing?.status || "").toLowerCase() === "active" &&
+        existing?.cancel !== true;
+
+      if (
+        !existing ||
+        (sessionIsActive && !existingIsActive)
+      ) {
+        sessionByPair.set(key, session);
       }
     }
 
+    // 3. Fetch all active queue bookings
     const queueConditions = [];
 
-    for (const { clinicId, doctorId } of clinicDoctorPairs.values()) {
-      const clinicCandidates = new Set();
+    for (const booking of bookingDocuments) {
+      const doctorId = getDoctorId(booking);
+
+      const dateKey = getIndiaDateKey(
+        getBookingDate(booking)
+      );
+
+      if (!doctorId || !dateKey) continue;
+
       const doctorCandidates = new Set();
 
-      addIdCandidates(clinicCandidates, clinicId);
       addIdCandidates(doctorCandidates, doctorId);
 
       queueConditions.push({
-        clinicId: { $in: [...clinicCandidates] },
-        doctorId: { $in: [...doctorCandidates] },
+        doctorId: {
+          $in: [...doctorCandidates],
+        },
         status: {
           $in: [
             "waiting",
@@ -1100,49 +1425,71 @@ export async function GET(request) {
       ...bookingDocuments,
     ]);
 
+    // 4. Calculate booking and queue information
     const now = new Date();
 
     const result = bookingDocuments.map((booking) => {
-      const clinicId = getClinicId(booking);
       const doctorId = getDoctorId(booking);
 
-      const clinic =
-        clinicById.get(clinicId) || booking.clinic || null;
+      const dateKey = getIndiaDateKey(
+        getBookingDate(booking)
+      );
 
-      const doctor =
-        doctorByPair.get(`${clinicId}|${doctorId}`) ||
-        getDoctorFromClinic(clinic, doctorId) ||
-        booking.doctor ||
-        null;
+      const slot = getBookingSlot(booking);
+
+      const sessionKey = makeSessionKey(
+        doctorId,
+        dateKey,
+        slot.open,
+        `${slot.open || ""}-${slot.close || ""}`
+      );
+
+      const sessionInfo =
+        sessionByPair.get(sessionKey) || null;
+
+      const doctor = booking.doctor || null;
 
       const queueInfo = calculateQueueInfo(
         booking,
         queuePool,
         doctor,
-        now
+        now,
+        sessionInfo,
+        sessionByPair
       );
 
-      return serializeBooking(booking, clinic, doctor, queueInfo);
+      return serializeBooking(
+        booking,
+        sessionInfo,
+        doctor,
+        queueInfo
+      );
     });
 
+    // 5. Sort bookings
     result.sort((a, b) => {
-      const dateA = getIndiaDateKey(getBookingDate(a)) || "";
-      const dateB = getIndiaDateKey(getBookingDate(b)) || "";
+      const dateA = a.bookingDate || "";
+      const dateB = b.bookingDate || "";
 
       if (dateA !== dateB) {
         return dateB.localeCompare(dateA);
       }
 
-      return getSequence(a) - getSequence(b);
+      return a.sequence - b.sequence;
     });
 
+    // 6. Return response
     return NextResponse.json({
       success: true,
       bookings: result,
       total: result.length,
     });
+
   } catch (error) {
-    console.error("GET /api/my-bookings error:", error);
+    console.error(
+      "GET /api/my-bookings error:",
+      error
+    );
 
     return NextResponse.json(
       {
@@ -1150,7 +1497,9 @@ export async function GET(request) {
         message: "Failed to fetch bookings.",
         error:
           process.env.NODE_ENV === "development"
-            ? error?.stack || error?.message || String(error)
+            ? error?.stack ||
+              error?.message ||
+              String(error)
             : undefined,
       },
       { status: 500 }
