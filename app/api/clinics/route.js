@@ -488,6 +488,9 @@ return {
         };
       });
 
+    console.log(updatedClinics[1].doctors);
+      
+
     return NextResponse.json(
       {
         success: true,

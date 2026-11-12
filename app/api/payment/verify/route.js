@@ -350,6 +350,92 @@ async function savePaymentRecord(
   );
 }
 
+/*
+ * Emergency notification helper.
+ *
+ * Calls /api/notifications/send only when invoked for an emergency booking.
+ * The patient's session cookie is forwarded so the notification API can
+ * authenticate the request using getServerSession().
+ */
+async function sendEmergencyNotification(
+  request,
+  {
+    doctorId,
+    patientName,
+    arrivalTime,
+    bookingReference,
+  }
+) {
+  try {
+    if (!doctorId || !bookingReference) {
+      return {
+        success: false,
+        pushSent: 0,
+        saved: 0,
+        reason: "Missing doctor ID or booking reference",
+      };
+    }
+
+    const arrivalMessage =
+      arrivalTime !== null &&
+      arrivalTime !== undefined &&
+      String(arrivalTime).trim() !== ""
+        ? `within ${arrivalTime} minutes`
+        : "as soon as possible";
+
+    const message =
+      `Emergency patient ${patientName} will arrive ` +
+      `${arrivalMessage}. Please prepare for the patient's arrival.`;
+
+    // Use the current request origin to construct an absolute URL.
+    const notificationUrl = new URL(
+      "/api/notifications/send",
+      request.url
+    );
+
+    const cookie = request.headers.get("cookie");
+
+    const response = await fetch(notificationUrl.toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      cache: "no-store",
+      body: JSON.stringify({
+        doctorId,
+        title: "Emergency Patient Arrival",
+        message,
+        url: "/doctor/dashboard",
+        dedupeKey: `emergency-${bookingReference}`,
+      }),
+    });
+
+    const result = await response.json().catch(() => ({}));
+
+    console.log("Emergency notification API response:", {
+      status: response.status,
+      result,
+    });
+
+    return {
+      success: response.ok && result.success === true,
+      pushSent: Number(result.pushSent || 0),
+      saved: Number(result.saved || 0),
+      result,
+    };
+  } catch (error) {
+    console.error("Emergency notification error:", error);
+
+    return {
+      success: false,
+      pushSent: 0,
+      saved: 0,
+      error: error.message || "Notification request failed",
+    };
+  }
+}
+
 export async function POST(request) {
   let db = null;
   let lockedOrderId = null;
@@ -508,7 +594,6 @@ export async function POST(request) {
     }
 
     // 5. Validate ownership using the account that created the order.
-    // For older payment orders, fall back to userId/userEmail.
     const createdBy = getCreatedBy(paymentOrder);
 
     const ownerId = createdBy.id;
@@ -597,7 +682,6 @@ export async function POST(request) {
 
     // 7. Read saved patient and appointment details.
     const patient = paymentOrder.patient || {};
-
     const appointment = paymentOrder.appointment || {};
     const slot = appointment.slot || {};
 
@@ -630,9 +714,7 @@ export async function POST(request) {
     ).trim();
 
     const priority = normalizePriority(paymentOrder);
-
-    const isEmergency =
-      priority === "emergency";
+    const isEmergency = priority === "emergency";
 
     const bookingType = String(
       paymentOrder.bookingType || "normal"
@@ -711,9 +793,37 @@ export async function POST(request) {
         }
       );
 
+      // Retry emergency notification for an already-created booking.
+      // Your notification API's dedupeKey prevents duplicate records.
+      let notificationResult = null;
+
+      if (
+        isEmergency &&
+        ACTIVE_STATUSES.includes(existingBooking.status)
+      ) {
+        notificationResult = await sendEmergencyNotification(
+          request,
+          {
+            doctorId: normalizeId(existingBooking.doctorId),
+            patientName:
+              existingBooking.patientName ||
+              existingBooking.patient?.name ||
+              patientName,
+            arrivalTime:
+              existingBooking.arrivalTime ?? arrivalTime,
+            bookingReference:
+              existingBooking.bookingReference || bookingReference,
+          }
+        );
+      }
+
       return jsonResponse({
         success: true,
         alreadyProcessed: true,
+        notificationSent:
+          notificationResult?.success === true &&
+          notificationResult?.pushSent > 0,
+        notificationResult,
         booking: existingBooking,
       });
     }
@@ -767,9 +877,35 @@ export async function POST(request) {
             normalizeEmail(retryBooking.userEmail) === ownerEmail)
         )
       ) {
+        let notificationResult = null;
+
+        if (
+          isEmergency &&
+          ACTIVE_STATUSES.includes(retryBooking.status)
+        ) {
+          notificationResult = await sendEmergencyNotification(
+            request,
+            {
+              doctorId: normalizeId(retryBooking.doctorId),
+              patientName:
+                retryBooking.patientName ||
+                retryBooking.patient?.name ||
+                patientName,
+              arrivalTime:
+                retryBooking.arrivalTime ?? arrivalTime,
+              bookingReference:
+                retryBooking.bookingReference || bookingReference,
+            }
+          );
+        }
+
         return jsonResponse({
           success: true,
           alreadyProcessed: true,
+          notificationSent:
+            notificationResult?.success === true &&
+            notificationResult?.pushSent > 0,
+          notificationResult,
           booking: retryBooking,
         });
       }
@@ -978,14 +1114,16 @@ export async function POST(request) {
         }
       );
 
+      // Payment was captured, but no booking was created.
+      // Do not send an emergency arrival notification.
       lockAcquired = false;
 
       return jsonResponse(
         {
           success: false,
-          paymentCaptured: true,
-          message:
-            "Payment was captured, but the slot has reached capacity. Please contact support for a refund or another appointment.",
+          message: "This appointment slot is full.",
+          paymentStatus: "captured",
+          bookingStatus: "capacity_conflict",
         },
         409
       );
@@ -1001,9 +1139,6 @@ export async function POST(request) {
     const bookingNow = new Date();
 
     // 17. Create booking.
-    // userId/userEmail identify the account that created the payment.
-    // patient contains the person receiving the appointment.
-    // expectedTurnAt is intentionally not calculated or stored.
     const booking = {
       bookingReference,
 
@@ -1040,7 +1175,8 @@ export async function POST(request) {
             }
           : slot.checkupStartTime
             ? {
-                checkupStartTime: slot.checkupStartTime,
+                checkupStartTime:
+                  slot.checkupStartTime,
               }
             : {}),
       },
@@ -1053,7 +1189,6 @@ export async function POST(request) {
         gender: patientGender,
       },
 
-      // Keep patient details accessible to existing UI code.
       patientName,
       patientPhone,
       patientAge,
@@ -1123,11 +1258,36 @@ export async function POST(request) {
       }
     );
 
+    // 21. Send notification only for emergency bookings.
+    let notificationResult = null;
+
+    if (isEmergency) {
+      notificationResult = await sendEmergencyNotification(
+        request,
+        {
+          doctorId,
+          patientName,
+          arrivalTime,
+          bookingReference,
+        }
+      );
+
+      console.log(
+        "Emergency notification result:",
+        notificationResult
+      );
+    }
+
+    // 22. Release verification lock.
     lockAcquired = false;
 
     return jsonResponse({
       success: true,
       message: "Payment verified and booking confirmed.",
+      notificationSent:
+        notificationResult?.success === true &&
+        notificationResult?.pushSent > 0,
+      notificationResult,
       booking: savedBooking,
     });
   } catch (error) {

@@ -1535,7 +1535,7 @@ const doctors = useMemo(() => {
             {!isUnavailable &&
               isCurrentSlot &&
               doctor.status.isOpen &&
-              doctor.isEmergency !== true && (
+              doctor.isEmergency !== true && doctor.isSessionActive &&(
                 <button
                   type="button"
                   onClick={() => handleEmergencyBooking(doctor)}

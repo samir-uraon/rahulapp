@@ -1588,7 +1588,12 @@ className="flex h-12 w-full items-center gap-3 rounded-xl border border-gray-200
 
                   {clinic.doctorsWithStatus?.length > 0 ? (
                     <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                      {clinic.doctorsWithStatus.map((doctor) => (
+                      {clinic.doctorsWithStatus.map((doctor) => 
+                      
+
+
+                      (
+  
                         <div
                           key={getDoctorId(doctor)}
                           className="min-w-0 rounded-xl border border-gray-200 bg-white p-3.5 sm:p-4"
@@ -1705,7 +1710,8 @@ className="flex h-12 w-full items-center gap-3 rounded-xl border border-gray-200
   !slotUnavailable &&
   doctor.status?.isOpen &&
   !doctor.status?.isHoliday &&
-  doctor.isEmergency !== true && (
+  doctor.isEmergency !== true &&
+  doctor.isSessionActive && (
                                             <Link
                                               href={`/services/clinics/${clinic._id}/emergency?doctor=${encodeURIComponent(
                                                 getDoctorId(doctor)
