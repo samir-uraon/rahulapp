@@ -26,7 +26,6 @@ function getCachedLocation() {
     const parsed = JSON.parse(value);
 
     if (parsed && typeof parsed === "object") {
-      // Migrate old QueueEase cache to Zeriy.
       localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
       return parsed;
     }
@@ -44,15 +43,28 @@ function getCachedLocation() {
   }
 }
 
+function validCoordinates(latitude, longitude) {
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
 export default function LocationPicker({
   open,
   onClose,
   onLocationSelected,
 }) {
-const { data: session, status, update } = useSession();
+  const { data: session, status, update } = useSession();
 
-const isAuthenticated =
-  status === "authenticated" && session?.user?.role=="user";
+  const userRole = String(session?.user?.role || "").toLowerCase();
+
+  const isAuthenticated =
+    status === "authenticated" && userRole === "user";
 
   const [location, setLocation] = useState("");
   const [originalLocation, setOriginalLocation] = useState("");
@@ -80,124 +92,126 @@ const isAuthenticated =
   // FETCH SAVED LOCATION
   // =====================================================
 
+  useEffect(() => {
+    if (!open || status === "loading") return;
 
-useEffect(() => {
-  if (!open || status === "loading") return;
+    let cancelled = false;
 
-  let cancelled = false;
+    async function loadSavedLocation() {
+      try {
+        if (!isAuthenticated) {
+          const cached = getCachedLocation();
 
-  async function loadSavedLocation() {
-    try {
-      // Guest: use localStorage, don't call protected API.
-      if (!isAuthenticated) {
-        const cached = getCachedLocation();
+          if (cancelled) return;
+
+          setLocation(cached?.address || "");
+          setOriginalLocation(cached?.address || "");
+          setSelectedLocation(null);
+          return;
+        }
+
+        const response = await fetch("/api/profile", {
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json",
+          },
+        });
+
+        if (response.status === 401) {
+          const cached = getCachedLocation();
+
+          if (cancelled) return;
+
+          setLocation(cached?.address || "");
+          setOriginalLocation(cached?.address || "");
+          setSelectedLocation(null);
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error("Unable to fetch profile");
+        }
+
+        const result = await response.json();
 
         if (cancelled) return;
+
+        const user = result.user || result.profile || {};
+
+        const saved = {
+          type: user.locationType || "search",
+          name: user.locationName || "",
+          address: user.address || "",
+          latitude:
+            user.location?.latitude != null
+              ? Number(user.location.latitude)
+              : null,
+          longitude:
+            user.location?.longitude != null
+              ? Number(user.location.longitude)
+              : null,
+          city: user.city || "",
+          state: user.state || "",
+          pinCode: user.pinCode || "",
+        };
+
+        if (saved.address) {
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify(saved)
+          );
+
+          localStorage.removeItem(LEGACY_STORAGE_KEY);
+
+          setLocation(saved.address);
+          setOriginalLocation(saved.address);
+        } else {
+          const cached = getCachedLocation();
+
+          setLocation(cached?.address || "");
+          setOriginalLocation(cached?.address || "");
+        }
+
+        setSelectedLocation(null);
+      } catch (error) {
+        if (cancelled) return;
+
+        console.error("LOAD_PROFILE_LOCATION_ERROR:", error);
+
+        const cached = getCachedLocation();
 
         setLocation(cached?.address || "");
         setOriginalLocation(cached?.address || "");
         setSelectedLocation(null);
-        return;
       }
-
-      const response = await fetch("/api/profile", {
-        method: "GET",
-        cache: "no-store",
-        headers: {
-          Accept: "application/json",
-        },
-      });
-
-      // Handle expired session without logging an error.
-      if (response.status === 401) {
-        const cached = getCachedLocation();
-
-        if (cancelled) return;
-
-        setLocation(cached?.address || "");
-        setOriginalLocation(cached?.address || "");
-        setSelectedLocation(null);
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error("Unable to fetch profile");
-      }
-
-      const result = await response.json();
-
-      if (cancelled) return;
-
-      const user = result.user || result.profile || {};
-
-      const saved = {
-        type: user.locationType || "search",
-        name: user.locationName || "",
-        address: user.address || "",
-        latitude: user.location?.latitude ?? null,
-        longitude: user.location?.longitude ?? null,
-        city: user.city || "",
-        state: user.state || "",
-        pinCode: user.pinCode || "",
-      };
-
-      if (saved.address) {
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify(saved)
-        );
-
-        localStorage.removeItem(LEGACY_STORAGE_KEY);
-
-        setLocation(saved.address);
-        setOriginalLocation(saved.address);
-      } else {
-        const cached = getCachedLocation();
-
-        setLocation(cached?.address || "");
-        setOriginalLocation(cached?.address || "");
-      }
-
-      setSelectedLocation(null);
-    } catch (error) {
-      if (cancelled) return;
-
-      console.error("LOAD_PROFILE_LOCATION_ERROR:", error);
-
-      const cached = getCachedLocation();
-
-      setLocation(cached?.address || "");
-      setOriginalLocation(cached?.address || "");
-      setSelectedLocation(null);
     }
-  }
 
-  loadSavedLocation();
+    loadSavedLocation();
 
-  return () => {
-    cancelled = true;
-  };
-}, [open, status, isAuthenticated]);
-
+    return () => {
+      cancelled = true;
+    };
+  }, [open, status, isAuthenticated]);
 
   // =====================================================
   // UPDATE NEXTAUTH SESSION
   // =====================================================
 
-const updateSessionLocation = async (data) => {
-  if (!isAuthenticated) return;
+  const updateSessionLocation = async (data) => {
+    if (!isAuthenticated) return;
 
-  try {
-    await update({
-      latitude: data.latitude ?? null,
-      longitude: data.longitude ?? null,
-      locationName: data.name || "",
-      address: data.address || "",
-    });
-  } catch (error) {
-    console.error("SESSION_LOCATION_UPDATE_ERROR:", error);
-  }
-};
+    try {
+      await update({
+        latitude: data.latitude ?? null,
+        longitude: data.longitude ?? null,
+        locationName: data.name || "",
+        address: data.address || "",
+      });
+    } catch (error) {
+      console.error("SESSION_LOCATION_UPDATE_ERROR:", error);
+    }
+  };
 
   // =====================================================
   // SEARCH LOCATIONS
@@ -250,7 +264,10 @@ const updateSessionLocation = async (data) => {
     }
   };
 
-  // Debounced search.
+  // =====================================================
+  // DEBOUNCED SEARCH
+  // =====================================================
+
   useEffect(() => {
     if (!open) return;
 
@@ -277,7 +294,7 @@ const updateSessionLocation = async (data) => {
   }, [location, originalLocation, selectedLocation, open]);
 
   // =====================================================
-  // SAVE LOCATION TO MONGODB + LOCALSTORAGE
+  // SAVE LOCATION
   // =====================================================
 
   const saveLocation = async (data) => {
@@ -291,24 +308,76 @@ const updateSessionLocation = async (data) => {
     savingRef.current = true;
     setSaving(true);
 
-    const locationData = {
-      type: data.type || "search",
-      placeId: data.placeId || null,
-      name: data.name || "",
-      address: data.address.trim(),
-      latitude: data.latitude ?? null,
-      longitude: data.longitude ?? null,
-      city: data.city || "",
-      state: data.state || "",
-      pinCode: data.pinCode || "",
-      ...(data.accuracy != null ? { accuracy: data.accuracy } : {}),
-    };
-
     try {
-      const hasCoordinates =
-        Number.isFinite(locationData.latitude) &&
-        Number.isFinite(locationData.longitude);
+      // Normalize coordinates.
+      const latitude =
+        data.latitude != null && data.latitude !== ""
+          ? Number(data.latitude)
+          : null;
 
+      const longitude =
+        data.longitude != null && data.longitude !== ""
+          ? Number(data.longitude)
+          : null;
+
+      const hasCoordinates =
+        latitude !== null &&
+        longitude !== null &&
+        validCoordinates(latitude, longitude);
+
+      // GPS must always have valid coordinates.
+      if (data.type === "gps" && !hasCoordinates) {
+        throw new Error(
+          "Invalid GPS coordinates. Please try detecting your location again."
+        );
+      }
+
+      // Reject invalid partial coordinate values.
+      if (
+        (latitude !== null || longitude !== null) &&
+        !hasCoordinates
+      ) {
+        throw new Error(
+          "Invalid location coordinates. Please select the location again."
+        );
+      }
+
+      const locationData = {
+        type: data.type || "search",
+        placeId: data.placeId || null,
+        name: data.name || "",
+        address: data.address.trim(),
+        latitude: hasCoordinates ? latitude : null,
+        longitude: hasCoordinates ? longitude : null,
+        city: data.city || "",
+        state: data.state || "",
+        pinCode: String(data.pinCode || ""),
+        ...(data.accuracy != null
+          ? { accuracy: Number(data.accuracy) }
+          : {}),
+      };
+
+      // Guest user: save only in local storage.
+      if (!isAuthenticated) {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(locationData)
+        );
+
+        localStorage.removeItem(LEGACY_STORAGE_KEY);
+
+        setLocation(locationData.address);
+        setOriginalLocation(locationData.address);
+        setSuggestions([]);
+        setSelectedLocation(null);
+
+        onLocationSelected?.(locationData);
+        onClose?.();
+
+        return true;
+      }
+
+      // Authenticated user: save in MongoDB.
       const payload = {
         address: locationData.address,
         locationName: locationData.name,
@@ -321,16 +390,25 @@ const updateSessionLocation = async (data) => {
           : null,
       };
 
-      if (locationData.city) payload.city = locationData.city;
-      if (locationData.state) payload.state = locationData.state;
-      if (locationData.pinCode) {
-        payload.pinCode = String(locationData.pinCode);
+      if (locationData.city) {
+        payload.city = locationData.city;
       }
+
+      if (locationData.state) {
+        payload.state = locationData.state;
+      }
+
+      if (locationData.pinCode) {
+        payload.pinCode = locationData.pinCode;
+      }
+
+      console.log("ZERiy LOCATION SAVE PAYLOAD:", payload);
 
       const response = await fetch("/api/profile", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
+          Accept: "application/json",
         },
         body: JSON.stringify(payload),
       });
@@ -338,13 +416,25 @@ const updateSessionLocation = async (data) => {
       const result = await response.json().catch(() => ({}));
 
       if (!response.ok) {
+        console.error("PROFILE LOCATION SAVE FAILED:", {
+          status: response.status,
+          response: result,
+          payload,
+        });
+
         throw new Error(
-          result.message || "Failed to save location"
+          result.message ||
+          result.error ||
+          `Failed to save location (${response.status})`
         );
       }
 
-      // Cache only after MongoDB confirms success.
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(locationData));
+      // Cache only after server confirms success.
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(locationData)
+      );
+
       localStorage.removeItem(LEGACY_STORAGE_KEY);
 
       setLocation(locationData.address);
@@ -360,7 +450,11 @@ const updateSessionLocation = async (data) => {
       return true;
     } catch (error) {
       console.error("SAVE_LOCATION_ERROR:", error);
-      toast.error(error.message || "Failed to save location.");
+
+      toast.error(
+        error.message || "Failed to save location."
+      );
+
       return false;
     } finally {
       savingRef.current = false;
@@ -372,76 +466,79 @@ const updateSessionLocation = async (data) => {
   };
 
   // =====================================================
-  // REVERSE GEOCODE GPS COORDINATES
-  // Uses app API to avoid browser-side geocoding requests.
+  // REVERSE GEOCODING
   // =====================================================
 
-
-async function reverseGeocode(latitude, longitude) {
-  try {
-    const response = await fetch(
-      `/api/location/reverse?lat=${encodeURIComponent(latitude)}&lon=${encodeURIComponent(longitude)}`,
-      {
-        method: "GET",
-        cache: "no-store",
-      }
-    );
-
-    const result = await response.json();
-
-    if (!response.ok) {
-      console.error("Reverse geocoding API failed:", {
-        status: response.status,
-        message: result.message,
-        providerStatus: result.providerStatus,
-      });
-
-      throw new Error(
-        result.message || "Reverse geocoding failed"
+  async function reverseGeocode(latitude, longitude) {
+    try {
+      const response = await fetch(
+        `/api/location/reverse?lat=${encodeURIComponent(latitude)}&lon=${encodeURIComponent(longitude)}`,
+        {
+          method: "GET",
+          cache: "no-store",
+        }
       );
+
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        console.error("REVERSE GEOCODING API FAILED:", {
+          status: response.status,
+          result,
+        });
+
+        throw new Error(
+          result.message || "Reverse geocoding failed"
+        );
+      }
+
+      const address = result.address || {};
+
+      return {
+        address: result.display_name || "",
+        city:
+          address.city ||
+          address.town ||
+          address.village ||
+          address.municipality ||
+          address.county ||
+          "",
+        state: address.state || "",
+        pincode: address.postcode || "",
+        country: address.country || "",
+        latitude: Number(latitude),
+        longitude: Number(longitude),
+      };
+    } catch (error) {
+      console.error("REVERSE_GEOCODING_ERROR:", error);
+      return null;
     }
-
-    const address = result.address || {};
-
-    return {
-      address: result.display_name || "",
-      city:
-        address.city ||
-        address.town ||
-        address.village ||
-        address.municipality ||
-        address.county ||
-        "",
-      state: address.state || "",
-      pincode: address.postcode || "",
-      country: address.country || "",
-      latitude: Number(latitude),
-      longitude: Number(longitude),
-    };
-  } catch (error) {
-    console.error("Reverse geocoding failed:", error);
-    return null;
   }
-}
-
 
   // =====================================================
-  // REQUEST LOCATION FROM EXPO NATIVE APP
+  // EXPO NATIVE LOCATION BRIDGE
   // =====================================================
 
   const requestNativeMobileLocation = () => {
-    // This bridge exists only inside React Native WebView.
-    if (!window.ReactNativeWebView?.postMessage) {
+    if (
+      typeof window === "undefined" ||
+      typeof window.ReactNativeWebView?.postMessage !== "function"
+    ) {
       return Promise.resolve({ available: false });
     }
 
-    const requestId = `${Date.now()}-${++nativeLocationRequestRef.current}`;
+    const requestId =
+      `${Date.now()}-${++nativeLocationRequestRef.current}`;
 
     return new Promise((resolve) => {
       let timeoutId;
 
       const cleanup = () => {
-        window.removeEventListener("zeriy:native-location", handleLocation);
+        window.removeEventListener(
+          "zeriy:native-location",
+          handleLocation
+        );
+
         window.clearTimeout(timeoutId);
       };
 
@@ -451,18 +548,27 @@ async function reverseGeocode(latitude, longitude) {
         if (result?.requestId !== requestId) return;
 
         cleanup();
-        resolve({ available: true, result });
+
+        resolve({
+          available: true,
+          result,
+        });
       };
 
-      window.addEventListener("zeriy:native-location", handleLocation);
+      window.addEventListener(
+        "zeriy:native-location",
+        handleLocation
+      );
 
       timeoutId = window.setTimeout(() => {
         cleanup();
+
         resolve({
           available: true,
           result: {
             success: false,
-            error: "Mobile location request timed out. Please try again.",
+            error:
+              "Mobile location request timed out. Please try again.",
           },
         });
       }, 25000);
@@ -476,6 +582,7 @@ async function reverseGeocode(latitude, longitude) {
         );
       } catch (error) {
         cleanup();
+
         resolve({
           available: true,
           result: {
@@ -488,9 +595,7 @@ async function reverseGeocode(latitude, longitude) {
   };
 
   // =====================================================
-  // CURRENT GPS LOCATION
-  // Native Expo GPS is preferred inside the mobile app.
-  // Browser GPS remains the fallback on desktop/mobile web.
+  // GET CURRENT LOCATION
   // =====================================================
 
   const getCurrentLocation = async () => {
@@ -504,52 +609,80 @@ async function reverseGeocode(latitude, longitude) {
     try {
       let coords;
 
-      // 1. Request native GPS from Expo when running in WebView.
-      const nativeResponse = await requestNativeMobileLocation();
+      // First try Expo native GPS.
+      const nativeResponse =
+        await requestNativeMobileLocation();
 
       if (nativeResponse.available) {
         const result = nativeResponse.result;
 
         if (!result?.success) {
-          throw new Error(result?.error || "Unable to get mobile location.");
+          throw new Error(
+            result?.error || "Unable to get mobile location."
+          );
         }
 
         const latitude = Number(result.latitude);
         const longitude = Number(result.longitude);
 
-        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-          throw new Error("The mobile app returned invalid coordinates.");
+        if (!validCoordinates(latitude, longitude)) {
+          throw new Error(
+            "The mobile app returned invalid GPS coordinates."
+          );
         }
 
         coords = {
           latitude,
           longitude,
-          accuracy: result.accuracy ?? null,
+          accuracy:
+            result.accuracy != null
+              ? Number(result.accuracy)
+              : null,
         };
       } else {
-        // 2. Use browser geolocation outside the Expo WebView.
+        // Browser GPS for normal website usage.
         if (!navigator.geolocation) {
-          throw new Error("Geolocation is not supported by this browser.");
+          throw new Error(
+            "Geolocation is not supported by this browser."
+          );
         }
 
         coords = await new Promise((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(
             (position) => {
               resolve({
-                latitude: position.coords.latitude,
-                longitude: position.coords.longitude,
+                latitude: Number(position.coords.latitude),
+                longitude: Number(position.coords.longitude),
                 accuracy: position.coords.accuracy ?? null,
               });
             },
             (error) => {
               if (error.code === error.PERMISSION_DENIED) {
-                reject(new Error("Location permission denied. Allow location access in your browser."));
-              } else if (error.code === error.POSITION_UNAVAILABLE) {
-                reject(new Error("Unable to detect your location. Check your device location settings."));
+                reject(
+                  new Error(
+                    "Location permission denied. Allow location access."
+                  )
+                );
+              } else if (
+                error.code === error.POSITION_UNAVAILABLE
+              ) {
+                reject(
+                  new Error(
+                    "Unable to detect your location. Check GPS settings."
+                  )
+                );
               } else if (error.code === error.TIMEOUT) {
-                reject(new Error("Location request timed out. Please try again."));
+                reject(
+                  new Error(
+                    "Location request timed out. Please try again."
+                  )
+                );
               } else {
-                reject(new Error("Unable to get your current location."));
+                reject(
+                  new Error(
+                    "Unable to get your current location."
+                  )
+                );
               }
             },
             {
@@ -563,10 +696,23 @@ async function reverseGeocode(latitude, longitude) {
 
       const { latitude, longitude, accuracy } = coords;
 
-      // 3. Reverse-geocode coordinates. GPS coordinates are retained
-      // even if the reverse-geocoding service is temporarily unavailable.
-      const addressData = await reverseGeocode(latitude, longitude);
+      if (!validCoordinates(latitude, longitude)) {
+        throw new Error("Invalid GPS coordinates.");
+      }
 
+      console.log("ZERiy GPS COORDINATES:", {
+        latitude,
+        longitude,
+        accuracy,
+      });
+
+      // Reverse geocode coordinates.
+      const addressData = await reverseGeocode(
+        latitude,
+        longitude
+      );
+
+      // Preserve valid GPS coordinates even if reverse geocoding fails.
       const locationData = {
         type: "gps",
         name: addressData?.city || "Current location",
@@ -581,15 +727,22 @@ async function reverseGeocode(latitude, longitude) {
         accuracy,
       };
 
-      // 4. Save through the existing profile API and update local/session state.
+      console.log("ZERiy FINAL GPS LOCATION:", locationData);
+
       const saved = await saveLocation(locationData);
 
       if (saved) {
-        toast.success("Current location detected and saved successfully.");
+        toast.success(
+          "Current location detected and saved successfully."
+        );
       }
     } catch (error) {
       console.error("CURRENT_LOCATION_ERROR:", error);
-      toast.error(error.message || "Unable to get or save your current location.");
+
+      toast.error(
+        error.message ||
+        "Unable to get or save your current location."
+      );
     } finally {
       gpsRequestRef.current = false;
 
@@ -604,13 +757,24 @@ async function reverseGeocode(latitude, longitude) {
   // =====================================================
 
   const selectSuggestion = (item) => {
+    const latitude =
+      item.latitude != null ? Number(item.latitude) : null;
+
+    const longitude =
+      item.longitude != null ? Number(item.longitude) : null;
+
+    const hasCoordinates =
+      latitude !== null &&
+      longitude !== null &&
+      validCoordinates(latitude, longitude);
+
     const selected = {
       type: "search",
       placeId: item.placeId || null,
       name: item.name || "",
       address: item.address || item.name || "",
-      latitude: item.latitude ?? null,
-      longitude: item.longitude ?? null,
+      latitude: hasCoordinates ? latitude : null,
+      longitude: hasCoordinates ? longitude : null,
       city: item.city || "",
       state: item.state || "",
       pinCode: item.pinCode || item.postcode || "",
@@ -620,6 +784,10 @@ async function reverseGeocode(latitude, longitude) {
     setLocation(selected.address);
     setSuggestions([]);
   };
+
+  // =====================================================
+  // CONTINUE
+  // =====================================================
 
   const handleContinue = async () => {
     if (!selectedLocation || savingRef.current) return;
@@ -702,6 +870,7 @@ async function reverseGeocode(latitude, longitude) {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-[1px] sm:items-center sm:p-4">
       <div className="flex max-h-[94dvh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-h-[90vh] sm:max-w-md sm:rounded-2xl">
+
         {/* Header */}
         <div className="shrink-0 border-b border-gray-100 bg-white px-4 py-4 sm:px-6">
           <div className="flex items-start justify-between gap-3">
@@ -714,6 +883,7 @@ async function reverseGeocode(latitude, longitude) {
                 <h2 className="truncate text-lg font-bold text-gray-900 sm:text-xl">
                   Choose your location
                 </h2>
+
                 <p className="text-xs text-gray-500 sm:text-sm">
                   Find services near you
                 </p>
@@ -734,6 +904,7 @@ async function reverseGeocode(latitude, longitude) {
 
         {/* Scrollable content */}
         <div className="location-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain">
+
           {/* Current location */}
           <div className="px-4 pt-4 sm:px-6 sm:pt-5">
             <button
@@ -744,7 +915,10 @@ async function reverseGeocode(latitude, longitude) {
             >
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white sm:h-11 sm:w-11">
                 {loading ? (
-                  <Loader2 size={19} className="animate-spin" />
+                  <Loader2
+                    size={19}
+                    className="animate-spin"
+                  />
                 ) : (
                   <Navigation size={19} />
                 )}
@@ -756,6 +930,7 @@ async function reverseGeocode(latitude, longitude) {
                     ? "Detecting your location..."
                     : "Use current location"}
                 </p>
+
                 <p className="mt-1 text-[11px] leading-4 text-gray-500 sm:text-xs">
                   Allow location access on your phone or browser
                 </p>
@@ -764,9 +939,11 @@ async function reverseGeocode(latitude, longitude) {
 
             <div className="my-4 flex items-center gap-3 sm:my-5">
               <div className="h-px flex-1 bg-gray-200" />
+
               <span className="text-[11px] font-medium text-gray-400">
                 OR
               </span>
+
               <div className="h-px flex-1 bg-gray-200" />
             </div>
           </div>
@@ -792,7 +969,10 @@ async function reverseGeocode(latitude, longitude) {
                       className="shrink-0 animate-spin text-indigo-500"
                     />
                   ) : (
-                    <Search size={18} className="shrink-0 text-gray-400" />
+                    <Search
+                      size={18}
+                      className="shrink-0 text-gray-400"
+                    />
                   )}
 
                   <input
@@ -825,17 +1005,24 @@ async function reverseGeocode(latitude, longitude) {
                   <div className="absolute left-0 right-0 top-full z-[60] mt-2 max-h-[40vh] overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-2xl">
                     {suggestions.map((item, index) => (
                       <button
-                        key={item.placeId || `${item.name}-${index}`}
+                        key={
+                          item.placeId ||
+                          `${item.name}-${index}`
+                        }
                         type="button"
                         onClick={() => selectSuggestion(item)}
                         className="flex w-full items-start gap-3 border-b border-gray-100 px-3 py-3 text-left last:border-b-0 hover:bg-gray-50 active:bg-gray-100 sm:px-4"
                       >
-                        <MapPin size={18} className="mt-0.5 shrink-0 text-indigo-500" />
+                        <MapPin
+                          size={18}
+                          className="mt-0.5 shrink-0 text-indigo-500"
+                        />
 
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-semibold text-gray-900">
                             {item.name}
                           </p>
+
                           <p className="mt-1 line-clamp-2 text-xs leading-4 text-gray-500">
                             {item.address}
                           </p>
@@ -849,28 +1036,38 @@ async function reverseGeocode(latitude, longitude) {
               {selectedLocation && (
                 <div className="mt-2 flex items-start gap-2 rounded-xl bg-emerald-50 px-3 py-2.5 text-xs text-emerald-700">
                   <MapPin size={15} className="mt-0.5 shrink-0" />
+
                   <span>
                     Location selected. Tap Continue to save it.
                   </span>
                 </div>
               )}
 
-              {locationChanged && location.trim() && !searching && (
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-gray-900 py-3 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
-                >
-                  {saving && <Loader2 size={16} className="animate-spin" />}
-                  {saving ? "Saving..." : "Continue"}
-                </button>
-              )}
+              {locationChanged &&
+                location.trim() &&
+                !searching && (
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-gray-900 py-3 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
+                  >
+                    {saving && (
+                      <Loader2
+                        size={16}
+                        className="animate-spin"
+                      />
+                    )}
+
+                    {saving ? "Saving..." : "Continue"}
+                  </button>
+                )}
             </form>
           </div>
 
           <div className="h-40 px-4 py-6 sm:px-6">
             <p className="text-center text-xs leading-5 text-gray-400">
-              Search for your area, street, locality or city to find nearby services.
+              Search for your area, street, locality or city
+              to find nearby services.
             </p>
           </div>
         </div>
