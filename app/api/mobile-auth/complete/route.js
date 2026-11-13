@@ -71,6 +71,7 @@ export async function GET(req) {
         address: token.address || null,
         latitude: token.latitude ?? null,
         longitude: token.longitude ?? null,
+        webPushEnabled:token.webPushEnabled===true
       },
       expiresAt,
       createdAt: new Date(),

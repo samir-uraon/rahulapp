@@ -81,6 +81,7 @@ export async function GET(req) {
       address: user.address || null,
       latitude: user.latitude ?? null,
       longitude: user.longitude ?? null,
+       webPushEnabled:user.webPushEnabled===true
     };
 
     // Auth.js v5 (authjs.* cookies) uses the cookie name as salt.

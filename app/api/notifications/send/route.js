@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 export const revalidate = 0;
 
 const DATABASE_NAME = "rahul";
-const SITE_URL = "https://zeriy.vercel.app";
+const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
 // Get possible MongoDB ID formats.
 function getIdVariants(id) {
@@ -41,11 +41,23 @@ function isValidSubscription(subscription) {
 
 // Allow only internal Zeriy notification URLs.
 function getNotificationUrl(url) {
-  const baseUrl = process.env.NEXTAUTH_URL2?.trim();
+  const baseUrl =
+    process.env.NEXTAUTH_URL2?.trim() ||
+    process.env.NEXTAUTH_URL?.trim() ||
+    "https://zeriy.vercel.app";
 
-  if (!baseUrl) return "/";
+  try {
+    const base = new URL(baseUrl);
+    const destination = new URL(String(url || "/"), base);
 
-  return `${baseUrl.replace(/\/+$/, "")}/${String(url || "/").replace(/^\/+/, "")}`;
+    if (destination.origin !== base.origin) {
+      return new URL("/", base).toString();
+    }
+
+    return destination.toString();
+  } catch {
+    return "https://zeriy.vercel.app/";
+  }
 }
 
 // Configure VAPID safely.
@@ -67,78 +79,147 @@ function configureWebPush() {
   }
 }
 
-// Save notification and send Web Push.
-async function sendPushNotification({
-  db,
+// Send native Expo Push Notification.
+async function sendExpoPushNotification({
   teamCollection,
   recipient,
   title,
   message,
   url,
-  sentBy,
-  senderRole,
-  dedupeKey,
+  notificationId,
 }) {
   const doctorId = String(recipient._id);
 
-  const notificationsCollection = db.collection("notifications");
+  const tokens = Array.isArray(recipient.expoPushTokens)
+    ? recipient.expoPushTokens
+        .map((item) =>
+          typeof item === "string" ? item : item?.token
+        )
+        .filter(
+          (token) =>
+            typeof token === "string" &&
+            /^(Expo(nent)?PushToken)\[[^\]]+\]$/.test(token)
+        )
+    : [];
 
-  // Prevent duplicate notifications.
-  if (dedupeKey) {
-    const existingNotification = await notificationsCollection.findOne({
-      recipientId: recipient._id,
-      dedupeKey,
-    });
+  const uniqueTokens = [...new Set(tokens)];
 
-    if (existingNotification) {
-      return {
-        doctorId,
-        saved: false,
-        pushSent: false,
-        skipped: true,
-        reason: "Duplicate notification",
-      };
-    }
+  if (!uniqueTokens.length) {
+    return {
+      sent: false,
+      count: 0,
+      reason: "Doctor has no valid Expo push tokens",
+    };
   }
 
-  // Save notification.
-  const notificationDocument = {
-    recipientId: recipient._id,
-    recipientRole: recipient.role,
+  const messages = uniqueTokens.map((token) => ({
+    to: token,
+    sound: "default",
     title,
-    message,
-    url,
-    sentBy,
-    senderRole,
-    type: "emergency",
-    read: false,
-    createdAt: new Date(),
-    ...(dedupeKey ? { dedupeKey } : {}),
-  };
+    body: message,
+    priority: "high",
+    channelId: "default",
+    data: {
+      url,
+      type: "emergency",
+      notificationId: String(notificationId),
+    },
+  }));
 
   try {
-    await notificationsCollection.insertOne(notificationDocument);
-  } catch (error) {
-    if (error.code === 11000) {
+    const response = await fetch(EXPO_PUSH_URL, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Accept-Encoding": "gzip, deflate",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(messages),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error("Expo Push API error:", result);
+
       return {
-        doctorId,
-        saved: false,
-        pushSent: false,
-        skipped: true,
-        reason: "Duplicate notification",
+        sent: false,
+        count: 0,
+        reason: "Expo Push API request failed",
       };
     }
 
-    throw error;
-  }
+    const tickets = Array.isArray(result.data)
+      ? result.data
+      : [];
 
-  // Check whether doctor enabled Web Push.
+    let successfulCount = 0;
+    const expiredTokens = [];
+
+    tickets.forEach((ticket, index) => {
+      if (ticket.status === "ok") {
+        successfulCount++;
+        return;
+      }
+
+      const errorCode = ticket.details?.error;
+
+      if (errorCode === "DeviceNotRegistered") {
+        expiredTokens.push(uniqueTokens[index]);
+      }
+
+      console.error("Expo Push ticket error:", ticket);
+    });
+
+    // Remove expired Expo tokens from the doctor's account.
+    if (expiredTokens.length) {
+      await teamCollection.updateOne(
+        { _id: recipient._id },
+        {
+          $pull: {
+            expoPushTokens: {
+              token: { $in: expiredTokens },
+            },
+          },
+          $set: {
+            expoPushUpdatedAt: new Date(),
+          },
+        }
+      );
+    }
+
+    return {
+      sent: successfulCount > 0,
+      count: successfulCount,
+      reason:
+        successfulCount > 0
+          ? "Expo notification sent successfully"
+          : "Expo notification could not be delivered",
+    };
+  } catch (error) {
+    console.error("Expo Push delivery error:", error);
+
+    return {
+      sent: false,
+      count: 0,
+      reason: "Expo Push delivery failed",
+    };
+  }
+}
+
+// Send Web Push Notification.
+async function sendWebPushNotification({
+  teamCollection,
+  recipient,
+  title,
+  message,
+  url,
+}) {
+  const doctorId = String(recipient._id);
+
   if (recipient.webPushEnabled !== true) {
     return {
-      doctorId,
-      saved: true,
-      pushSent: false,
-      skipped: true,
+      sent: false,
       reason: "Web Push is disabled for this doctor",
     };
   }
@@ -147,21 +228,14 @@ async function sendPushNotification({
 
   if (!isValidSubscription(subscription)) {
     return {
-      doctorId,
-      saved: true,
-      pushSent: false,
-      skipped: true,
-      reason: "Doctor has no valid push subscription",
+      sent: false,
+      reason: "Doctor has no valid Web Push subscription",
     };
   }
 
-  // Check VAPID configuration.
   if (!configureWebPush()) {
     return {
-      doctorId,
-      saved: true,
-      pushSent: false,
-      skipped: true,
+      sent: false,
       reason: "Web Push VAPID configuration is missing or invalid",
     };
   }
@@ -184,16 +258,13 @@ async function sendPushNotification({
     );
 
     return {
-      doctorId,
-      saved: true,
-      pushSent: true,
-      skipped: false,
-      reason: "Notification sent successfully",
+      sent: true,
+      reason: "Web Push notification sent successfully",
     };
   } catch (error) {
     console.error("Web Push delivery error:", error);
 
-    // Remove expired subscriptions.
+    // Remove expired Web Push subscriptions.
     if (error.statusCode === 404 || error.statusCode === 410) {
       await teamCollection.updateOne(
         { _id: recipient._id },
@@ -209,22 +280,127 @@ async function sendPushNotification({
       );
 
       return {
-        doctorId,
-        saved: true,
-        pushSent: false,
-        skipped: true,
-        reason: "Doctor subscription expired and was disabled",
+        sent: false,
+        reason: "Web Push subscription expired and was disabled",
       };
     }
 
     return {
-      doctorId,
-      saved: true,
-      pushSent: false,
-      skipped: false,
-      reason: "Push delivery failed",
+      sent: false,
+      reason: "Web Push delivery failed",
     };
   }
+}
+
+// Save notification and send both Web Push and Expo Push.
+async function sendPushNotification({
+  db,
+  teamCollection,
+  recipient,
+  title,
+  message,
+  url,
+  sentBy,
+  senderRole,
+  dedupeKey,
+}) {
+  const doctorId = String(recipient._id);
+  const notificationsCollection = db.collection("notifications");
+
+  // Prevent duplicate notifications.
+  if (dedupeKey) {
+    const existingNotification = await notificationsCollection.findOne({
+      recipientId: recipient._id,
+      dedupeKey,
+    });
+
+    if (existingNotification) {
+      return {
+        doctorId,
+        saved: false,
+        pushSent: false,
+        webPushSent: false,
+        expoPushSent: false,
+        skipped: true,
+        reason: "Duplicate notification",
+      };
+    }
+  }
+
+  // Save notification only once.
+  const notificationDocument = {
+    recipientId: recipient._id,
+    recipientRole: recipient.role,
+    title,
+    message,
+    url,
+    sentBy,
+    senderRole,
+    type: "emergency",
+    read: false,
+    createdAt: new Date(),
+    ...(dedupeKey ? { dedupeKey } : {}),
+  };
+
+  let insertResult;
+
+  try {
+    insertResult = await notificationsCollection.insertOne(
+      notificationDocument
+    );
+  } catch (error) {
+    if (error.code === 11000) {
+      return {
+        doctorId,
+        saved: false,
+        pushSent: false,
+        webPushSent: false,
+        expoPushSent: false,
+        skipped: true,
+        reason: "Duplicate notification",
+      };
+    }
+
+    throw error;
+  }
+
+  // Send native Expo Push.
+  const expoResult = await sendExpoPushNotification({
+    teamCollection,
+    recipient,
+    title,
+    message,
+    url,
+    notificationId: insertResult.insertedId,
+  });
+
+  // Send existing Web Push.
+  const webResult = await sendWebPushNotification({
+    teamCollection,
+    recipient,
+    title,
+    message,
+    url,
+  });
+
+  const pushSent = expoResult.sent || webResult.sent;
+
+  return {
+    doctorId,
+    saved: true,
+    pushSent,
+    webPushSent: webResult.sent,
+    expoPushSent: expoResult.sent,
+    expoPushCount: expoResult.count,
+    skipped: !pushSent,
+    reason: pushSent
+      ? "Notification saved and at least one push channel accepted it"
+      : "Notification saved, but no push channel accepted it",
+    delivery: {
+      expo: expoResult.reason,
+      web: webResult.reason,
+    },
+  };
 }
 
 export async function POST(request) {
@@ -263,7 +439,11 @@ export async function POST(request) {
       dedupeKey,
     } = body;
 
-    if (!doctorId || typeof doctorId !== "string" && typeof doctorId !== "number") {
+    if (
+      !doctorId ||
+      (typeof doctorId !== "string" &&
+        typeof doctorId !== "number")
+    ) {
       return NextResponse.json(
         {
           success: false,
@@ -306,7 +486,7 @@ export async function POST(request) {
     const db = client.db(DATABASE_NAME);
     const teamCollection = db.collection("team");
 
-    // 4. Find doctor directly using doctorId.
+    // 4. Find doctor using doctorId.
     const doctorIdString = String(doctorId).trim();
 
     const doctorConditions = [
@@ -338,7 +518,7 @@ export async function POST(request) {
       );
     }
 
-    // 5. Send notification to the doctor.
+    // 5. Save and send notification through both channels.
     const result = await sendPushNotification({
       db,
       teamCollection,
@@ -357,6 +537,8 @@ export async function POST(request) {
       recipients: 1,
       saved: result.saved ? 1 : 0,
       pushSent: result.pushSent ? 1 : 0,
+      webPushSent: result.webPushSent ? 1 : 0,
+      expoPushSent: result.expoPushSent ? 1 : 0,
       skipped: result.skipped ? 1 : 0,
       results: [result],
     });

@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
@@ -28,7 +27,6 @@ function urlBase64ToUint8Array(base64String) {
 
 function arrayBufferToBase64Url(buffer) {
   const bytes = new Uint8Array(buffer);
-
   let binary = "";
 
   bytes.forEach((byte) => {
@@ -76,12 +74,86 @@ function getBrowserSupport() {
     return "Web Push is not supported in this browser.";
   }
 
-  // iOS/iPadOS requires an installed Home Screen web app.
   if (isIOSDevice() && !isInstalledApp()) {
     return "On iPhone or iPad, add Zeriy to your Home Screen and open it from there to enable notifications.";
   }
 
   return null;
+}
+
+// Get Expo push token from the native React Native app.
+function requestNativePushToken() {
+  return new Promise((resolve, reject) => {
+    const bridge = window.ReactNativeWebView;
+
+    if (typeof bridge?.postMessage !== "function") {
+      reject(new Error("Zeriy mobile app not detected."));
+      return;
+    }
+
+    let timeout;
+
+    function cleanup() {
+      clearTimeout(timeout);
+
+      window.removeEventListener(
+        "ZERIY_PUSH_TOKEN",
+        handleToken
+      );
+
+      window.removeEventListener(
+        "ZERIY_PUSH_ERROR",
+        handleError
+      );
+    }
+
+    function handleToken(event) {
+      cleanup();
+
+      if (
+        typeof event.detail !== "string" ||
+        !event.detail
+      ) {
+        reject(new Error("Empty Expo push token."));
+        return;
+      }
+
+      resolve(event.detail);
+    }
+
+    function handleError(event) {
+      cleanup();
+
+      reject(
+        new Error(
+          event.detail ||
+          "Native notification registration failed."
+        )
+      );
+    }
+
+    timeout = setTimeout(() => {
+      cleanup();
+
+      reject(
+        new Error(
+          "Mobile notification registration timed out."
+        )
+      );
+    }, 30000);
+
+    window.addEventListener(
+      "ZERIY_PUSH_TOKEN",
+      handleToken
+    );
+
+    window.addEventListener(
+      "ZERIY_PUSH_ERROR",
+      handleError
+    );
+
+    bridge.postMessage("ZERIY_REGISTER_PUSH");
+  });
 }
 
 export default function EnableNotifications({
@@ -102,7 +174,10 @@ export default function EnableNotifications({
 
   const syncSession = updateSession || update;
 
-  // Keep component synchronized with server data.
+  const isNativeApp =
+    typeof window !== "undefined" &&
+    typeof window.ReactNativeWebView?.postMessage === "function";
+
   useEffect(() => {
     setEnabled(Boolean(webPushEnabled));
   }, [webPushEnabled]);
@@ -136,6 +211,44 @@ export default function EnableNotifications({
         throw new Error("Please login first.");
       }
 
+      // NATIVE EXPO MOBILE APP
+      if (isNativeApp) {
+        const token = await requestNativePushToken();
+
+        const response = await fetch(
+          "/api/notifications/native-subscribe",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            credentials: "same-origin",
+            cache: "no-store",
+            body: JSON.stringify({ token }),
+          }
+        );
+
+        const data = await response
+          .json()
+          .catch(() => ({}));
+
+        if (!response.ok || !data.success) {
+          throw new Error(
+            data.message ||
+            "Unable to save mobile push token."
+          );
+        }
+
+        setEnabled(true);
+
+        setMessage(
+          "Mobile notifications enabled successfully!"
+        );
+
+        return;
+      }
+
+      // EXISTING WEBSITE WEB PUSH
       const unsupported = getBrowserSupport();
 
       if (unsupported) {
@@ -152,7 +265,6 @@ export default function EnableNotifications({
       const applicationServerKey =
         urlBase64ToUint8Array(publicKey);
 
-      // Request permission only after user interaction.
       let permission = Notification.permission;
 
       if (permission === "default") {
@@ -172,23 +284,17 @@ export default function EnableNotifications({
         );
       }
 
-      // Register service worker.
       const registration =
         await navigator.serviceWorker.register(
           "/sw.js",
-          {
-            scope: "/",
-          }
+          { scope: "/" }
         );
 
-      // Wait until service worker is ready.
       await navigator.serviceWorker.ready;
 
-      // Get existing subscription.
       let subscription =
         await registration.pushManager.getSubscription();
 
-      // Check existing VAPID key.
       if (subscription) {
         const existingKey =
           subscription.options?.applicationServerKey;
@@ -209,7 +315,6 @@ export default function EnableNotifications({
         }
       }
 
-      // Create subscription if required.
       if (!subscription) {
         subscription =
           await registration.pushManager.subscribe({
@@ -218,7 +323,6 @@ export default function EnableNotifications({
           });
       }
 
-      // Save subscription to MongoDB.
       const response = await fetch(
         "/api/notifications/subscribe",
         {
@@ -228,9 +332,7 @@ export default function EnableNotifications({
           },
           credentials: "same-origin",
           cache: "no-store",
-          body: JSON.stringify(
-            subscription.toJSON()
-          ),
+          body: JSON.stringify(subscription.toJSON()),
         }
       );
 
@@ -282,20 +384,55 @@ export default function EnableNotifications({
         throw new Error("Please login first.");
       }
 
+      // NATIVE EXPO MOBILE APP
+      if (isNativeApp) {
+        const token = await requestNativePushToken();
+
+        const response = await fetch(
+          "/api/notifications/native-subscribe",
+          {
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            credentials: "same-origin",
+            cache: "no-store",
+            body: JSON.stringify({ token }),
+          }
+        );
+
+        const data = await response
+          .json()
+          .catch(() => ({}));
+
+        if (!response.ok || !data.success) {
+          throw new Error(
+            data.message ||
+            "Unable to disable mobile notifications."
+          );
+        }
+
+        setEnabled(false);
+
+        setMessage(
+          "Mobile notifications disabled successfully!"
+        );
+
+        return;
+      }
+
+      // EXISTING WEBSITE WEB PUSH
       let registration = null;
       let subscription = null;
 
       if ("serviceWorker" in navigator) {
         registration =
-          await navigator.serviceWorker.getRegistration(
-            "/"
-          );
+          await navigator.serviceWorker.getRegistration("/");
 
         subscription =
           await registration?.pushManager.getSubscription();
       }
 
-      // Remove subscription from server.
       const response = await fetch(
         "/api/notifications/subscribe",
         {
@@ -324,7 +461,6 @@ export default function EnableNotifications({
         );
       }
 
-      // Remove local browser subscription.
       if (subscription) {
         await subscription.unsubscribe();
       }
@@ -373,7 +509,6 @@ export default function EnableNotifications({
 
   return (
     <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-start">
-
       <button
         type="button"
         onClick={handleToggle}
@@ -420,7 +555,6 @@ export default function EnableNotifications({
           {message}
         </p>
       )}
-
     </div>
   );
 }
