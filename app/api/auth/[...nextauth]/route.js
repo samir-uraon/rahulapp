@@ -91,6 +91,7 @@ export const authOptions = {
             latitude: user.location?.latitude ?? user.latitude ?? null,
             longitude: user.location?.longitude ?? user.longitude ?? null,
             webPushEnabled: user.webPushEnabled === true,
+              expoPushEnabled: user.expoPushEnabled === true,
           };
         } catch (error) {
           console.error("Authentication error:", error);
@@ -142,6 +143,7 @@ export const authOptions = {
               existingUser.locationName ||
               "";
 user.webPushEnabled = existingUser.webPushEnabled === true;
+user.expoPushEnabled = existingUser.expoPushEnabled === true;
             user.locationName = existingUser.locationName || "";
             user.address = existingUser.address || "";
 
@@ -175,6 +177,7 @@ user.webPushEnabled = existingUser.webPushEnabled === true;
             role: "user",
             isVerified: true,
 webPushEnabled: false,
+expoPushEnabled: false,
             locationName: "",
             address: "",
             location: {
@@ -190,6 +193,7 @@ webPushEnabled: false,
           user.phone = "";
           user.role = "user";
 user.webPushEnabled = false;
+user.expoPushEnabled = false;
           user.location = "";
           user.locationName = "";
           user.address = "";
@@ -215,6 +219,7 @@ user.webPushEnabled = false;
         token.email = user.email;
         token.phone = user.phone || "";
 token.webPushEnabled = user.webPushEnabled === true;
+token.expoPushEnabled = user.expoPushEnabled === true;
         // ROLE
         token.role = user.role || "user";
 
@@ -237,6 +242,9 @@ token.webPushEnabled = user.webPushEnabled === true;
         }
         if (session.webPushEnabled !== undefined) {
   token.webPushEnabled = session.webPushEnabled === true;
+}
+  if (session.expoPushEnabled !== undefined) {
+  token.expoPushEnabled = session.expoPushEnabled === true;
 }
 
         if (session.locationName !== undefined) {
@@ -276,9 +284,11 @@ token.webPushEnabled = user.webPushEnabled === true;
       if (session.user) {
         session.user.id = token.id;
         session.user.name = token.name;
+
         session.user.email = token.email;
         session.user.phone = token.phone || "";
 session.user.webPushEnabled = token.webPushEnabled === true;
+session.user.expoPushEnabled = token.expoPushEnabled === true;
         // ROLE
         session.user.role = token.role || "user";
 

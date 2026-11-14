@@ -7,38 +7,57 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 export const runtime = "nodejs";
 export const revalidate = 0;
 
-const ALLOWED_LOCATION_TYPES = ["current", "search", "manual"];
+const ALLOWED_LOCATION_TYPES = [
+  "current",
+  "search",
+  "manual",
+];
 
-const jsonResponse = (data, status = 200) =>
-  NextResponse.json(data, {
-    status,
-    headers: {
-      "Cache-Control": "no-store, no-cache, must-revalidate",
-    },
-  });
+function validCoordinates(latitude, longitude) {
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
 
-const getLocation = (user) => ({
-  name: user.locationName || "",
-  type: user.locationType || "",
-  latitude: user.location?.latitude ?? user.latitude ?? null,
-  longitude: user.location?.longitude ?? user.longitude ?? null,
-});
+function getLocation(user) {
+  return {
+    name: user.locationName || "",
+    type: user.locationType || "",
+    latitude:
+      user.location?.latitude ??
+      user.latitude ??
+      null,
+    longitude:
+      user.location?.longitude ??
+      user.longitude ??
+      null,
+  };
+}
 
-const getProfile = (user) => ({
-  id: user._id.toString(),
-  name: user.name || "",
-  email: user.email || "",
-  phone: user.phone || "",
-  address: user.address || "",
-  locationName: user.locationName || "",
-  locationType: user.locationType || "",
-  location: getLocation(user),
-  webPushEnabled: Boolean(user.webPushEnabled),
-});
+function getProfile(user) {
+  return {
+    name: user.name || "",
+    email: user.email || "",
+    phone: user.phone || "",
+    address: user.address || "",
+    locationName: user.locationName || "",
+    locationType: user.locationType || "",
+    location: getLocation(user),
+    city: user.city || "",
+    state: user.state || "",
+    pinCode: user.pinCode || "",
+    webPushEnabled: Boolean(user.webPushEnabled),
+    expoPushEnabled: Boolean(user.expoPushEnabled),
+  };
+}
 
 // =====================================================
 // GET PROFILE
-// GET /api/profile
 // =====================================================
 
 export async function GET() {
@@ -46,44 +65,60 @@ export async function GET() {
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.email) {
-      return jsonResponse(
-        { success: false, message: "Please login to continue", code: "UNAUTHORIZED" },
-        401
+      return NextResponse.json(
+        { success: false, message: "Unauthorized" },
+        { status: 401 }
       );
     }
 
     const client = await clientPromise;
-    const db = client.db(process.env.MONGODB);
+    const db = client.db("rahul");
 
     const user = await db.collection("users").findOne(
       { email: session.user.email },
-      { projection: { password: 0 } }
+      {
+        projection: {
+          password: 0,
+          otp: 0,
+          resetToken: 0,
+        },
+      }
     );
 
     if (!user) {
-      return jsonResponse(
-        { success: false, message: "User not found", code: "USER_NOT_FOUND" },
-        404
+      return NextResponse.json(
+        { success: false, message: "User not found" },
+        { status: 404 }
       );
     }
 
-    return jsonResponse({
-      success: true,
-      user: getProfile(user),
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        user: getProfile(user),
+      },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": "no-store, max-age=0",
+        },
+      }
+    );
   } catch (error) {
-    console.error("PROFILE_GET_ERROR:", error);
+    console.error("GET_PROFILE_ERROR:", error);
 
-    return jsonResponse(
-      { success: false, message: "Unable to fetch profile. Please try again.", code: "PROFILE_FETCH_FAILED" },
-      500
+    return NextResponse.json(
+      {
+        success: false,
+        message: "Failed to fetch profile",
+      },
+      { status: 500 }
     );
   }
 }
 
 // =====================================================
 // UPDATE PROFILE
-// PUT /api/profile
 // =====================================================
 
 export async function PUT(request) {
@@ -91,207 +126,298 @@ export async function PUT(request) {
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.email) {
-      return jsonResponse(
-        { success: false, message: "Please login to continue", code: "UNAUTHORIZED" },
-        401
+      return NextResponse.json(
+        { success: false, message: "Unauthorized" },
+        { status: 401 }
       );
     }
 
-    let body;
+    const body = await request.json();
 
-    try {
-      body = await request.json();
-    } catch {
-      return jsonResponse(
-        { success: false, message: "Invalid request data", code: "INVALID_JSON" },
-        400
+    const client = await clientPromise;
+    const db = client.db("rahul");
+
+    const users = db.collection("users");
+
+    const user = await users.findOne({
+      email: session.user.email,
+    });
+
+    if (!user) {
+      return NextResponse.json(
+        { success: false, message: "User not found" },
+        { status: 404 }
       );
     }
 
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return jsonResponse(
-        { success: false, message: "Invalid request body", code: "INVALID_BODY" },
-        400
-      );
-    }
+    const updateData = {};
 
-    const has = (key) =>
-      Object.prototype.hasOwnProperty.call(body, key);
+    // -------------------------------------------------
+    // BASIC PROFILE FIELDS
+    // -------------------------------------------------
 
-    const fieldsToUpdate = {
-      updatedAt: new Date(),
-    };
-
-    // NAME
-    if (has("name")) {
-      if (typeof body.name !== "string" || !body.name.trim()) {
-        return jsonResponse(
-          { success: false, message: "Name is required", code: "INVALID_NAME" },
-          400
-        );
-      }
-
-      fieldsToUpdate.name = body.name.trim();
-    }
-
-    // PHONE
-    if (has("phone")) {
-      if (typeof body.phone !== "string") {
-        return jsonResponse(
-          { success: false, message: "Invalid phone number", code: "INVALID_PHONE" },
-          400
-        );
-      }
-
-      const phone = body.phone.trim();
-
-      if (phone && !/^[0-9]{10}$/.test(phone)) {
-        return jsonResponse(
-          { success: false, message: "Phone number must contain exactly 10 digits", code: "INVALID_PHONE" },
-          400
-        );
-      }
-
-      fieldsToUpdate.phone = phone;
-    }
-
-    // ADDRESS
-    if (has("address")) {
-      if (typeof body.address !== "string" || !body.address.trim()) {
-        return jsonResponse(
-          { success: false, message: "Address is required", code: "INVALID_ADDRESS" },
-          400
-        );
-      }
-
-      fieldsToUpdate.address = body.address.trim();
-    }
-
-    // LOCATION NAME
-    if (has("locationName")) {
-      if (typeof body.locationName !== "string") {
-        return jsonResponse(
-          { success: false, message: "Invalid location name", code: "INVALID_LOCATION_NAME" },
-          400
-        );
-      }
-
-      fieldsToUpdate.locationName = body.locationName.trim();
-    }
-
-    // LOCATION TYPE
-    if (has("locationType")) {
+    if (body.name !== undefined) {
       if (
-        typeof body.locationType !== "string" ||
-        !ALLOWED_LOCATION_TYPES.includes(body.locationType)
+        typeof body.name !== "string" ||
+        !body.name.trim()
       ) {
-        return jsonResponse(
+        return NextResponse.json(
           {
             success: false,
-            message: "Invalid location type. Please select your location again.",
-            code: "INVALID_LOCATION_TYPE",
-            allowedTypes: ALLOWED_LOCATION_TYPES,
+            message: "Invalid name",
           },
-          400
+          { status: 400 }
         );
       }
 
-      fieldsToUpdate.locationType = body.locationType;
+      updateData.name = body.name.trim();
     }
 
-    // COORDINATES
-    if (has("location")) {
-      const location = body.location;
+    if (body.phone !== undefined) {
+      if (typeof body.phone !== "string") {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Invalid phone number",
+          },
+          { status: 400 }
+        );
+      }
 
-      if (location === null) {
-        fieldsToUpdate.location = {
-          latitude: null,
-          longitude: null,
-        };
+      updateData.phone = body.phone.trim();
+    }
+
+    // -------------------------------------------------
+    // LOCATION ADDRESS
+    // -------------------------------------------------
+
+    if (body.address !== undefined) {
+      if (
+        typeof body.address !== "string" ||
+        !body.address.trim()
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Invalid location address",
+          },
+          { status: 400 }
+        );
+      }
+
+      updateData.address = body.address.trim();
+    }
+
+    if (body.locationName !== undefined) {
+      if (typeof body.locationName !== "string") {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Invalid location name",
+          },
+          { status: 400 }
+        );
+      }
+
+      updateData.locationName = body.locationName.trim();
+    }
+
+    // -------------------------------------------------
+    // LOCATION TYPE
+    // -------------------------------------------------
+
+    if (body.locationType !== undefined) {
+      const locationType =
+        body.locationType === "gps"
+          ? "current"
+          : body.locationType;
+
+      if (
+        !ALLOWED_LOCATION_TYPES.includes(locationType)
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Invalid location type",
+          },
+          { status: 400 }
+        );
+      }
+
+      updateData.locationType = locationType;
+    }
+
+    // -------------------------------------------------
+    // LOCATION COORDINATES
+    // -------------------------------------------------
+
+    if (body.location !== undefined) {
+      if (body.location === null) {
+        updateData.location = null;
       } else {
-        const latitude = location?.latitude;
-        const longitude = location?.longitude;
-
         if (
-          !location ||
-          typeof location !== "object" ||
-          Array.isArray(location) ||
-          typeof latitude !== "number" ||
-          typeof longitude !== "number" ||
-          !Number.isFinite(latitude) ||
-          !Number.isFinite(longitude) ||
-          latitude < -90 ||
-          latitude > 90 ||
-          longitude < -180 ||
-          longitude > 180
+          typeof body.location !== "object" ||
+          Array.isArray(body.location)
         ) {
-          return jsonResponse(
+          return NextResponse.json(
             {
               success: false,
-              message: "Invalid location coordinates. Please select a valid location.",
-              code: "INVALID_COORDINATES",
+              message: "Invalid location data",
             },
-            400
+            { status: 400 }
           );
         }
 
-        fieldsToUpdate.location = {
+        const latitude = Number(body.location.latitude);
+        const longitude = Number(body.location.longitude);
+
+        if (!validCoordinates(latitude, longitude)) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "Invalid location coordinates",
+            },
+            { status: 400 }
+          );
+        }
+
+        updateData.location = {
           latitude,
           longitude,
         };
       }
     }
 
-    // CHECK FOR CHANGES
-    const hasActualUpdate = Object.keys(fieldsToUpdate).some(
-      (key) => key !== "updatedAt"
-    );
+    // Current location requires coordinates.
+    const finalLocationType =
+      updateData.locationType ?? user.locationType;
 
-    if (!hasActualUpdate) {
-      return jsonResponse(
-        { success: false, message: "No changes provided", code: "NO_CHANGES" },
-        400
+    const finalLocation =
+      updateData.location !== undefined
+        ? updateData.location
+        : user.location;
+
+    if (
+      finalLocationType === "current" &&
+      (
+        !finalLocation ||
+        !validCoordinates(
+          Number(finalLocation.latitude),
+          Number(finalLocation.longitude)
+        )
+      )
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Current location requires valid GPS coordinates",
+        },
+        { status: 400 }
       );
     }
 
-    // DATABASE
-    const client = await clientPromise;
-    const db = client.db(process.env.MONGODB);
-    const users = db.collection("users");
+    // -------------------------------------------------
+    // CITY, STATE AND PIN CODE
+    // -------------------------------------------------
 
-    const result = await users.updateOne(
+    if (body.city !== undefined) {
+      if (typeof body.city !== "string") {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Invalid city",
+          },
+          { status: 400 }
+        );
+      }
+
+      updateData.city = body.city.trim();
+    }
+
+    if (body.state !== undefined) {
+      if (typeof body.state !== "string") {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Invalid state",
+          },
+          { status: 400 }
+        );
+      }
+
+      updateData.state = body.state.trim();
+    }
+
+    if (body.pinCode !== undefined) {
+      if (
+        typeof body.pinCode !== "string" &&
+        typeof body.pinCode !== "number"
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "Invalid pin code",
+          },
+          { status: 400 }
+        );
+      }
+
+      updateData.pinCode = String(body.pinCode).trim();
+    }
+
+    // -------------------------------------------------
+    // SAVE TO MONGODB
+    // -------------------------------------------------
+
+    if (Object.keys(updateData).length === 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "No valid fields provided",
+        },
+        { status: 400 }
+      );
+    }
+
+    await users.updateOne(
       { email: session.user.email },
-      { $set: fieldsToUpdate }
+      {
+        $set: {
+          ...updateData,
+          updatedAt: new Date(),
+        },
+      }
     );
-
-    if (result.matchedCount === 0) {
-      return jsonResponse(
-        { success: false, message: "User not found", code: "USER_NOT_FOUND" },
-        404
-      );
-    }
 
     const updatedUser = await users.findOne(
       { email: session.user.email },
-      { projection: { password: 0 } }
+      {
+        projection: {
+          password: 0,
+          otp: 0,
+          resetToken: 0,
+        },
+      }
     );
 
-    return jsonResponse({
-      success: true,
-      message: "Profile updated successfully",
-      user: getProfile(updatedUser),
-    });
-
+    return NextResponse.json(
+      {
+        success: true,
+        message: "Profile updated successfully",
+        user: getProfile(updatedUser),
+      },
+      { status: 200 }
+    );
   } catch (error) {
-    console.error("PROFILE_UPDATE_ERROR:", error);
+    console.error("UPDATE_PROFILE_ERROR:", error);
 
-    return jsonResponse(
+    return NextResponse.json(
       {
         success: false,
-        message: "Unable to update profile. Please try again.",
-        code: "PROFILE_UPDATE_FAILED",
+        message: "Failed to update profile",
       },
-      500
+      { status: 500 }
     );
   }
 }

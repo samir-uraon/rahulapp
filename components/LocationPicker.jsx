@@ -15,6 +15,13 @@ import { useSession } from "next-auth/react";
 const STORAGE_KEY = "Zeriy-location";
 const LEGACY_STORAGE_KEY = "queueease-location";
 
+const ALLOWED_LOCATION_TYPES = ["current", "search", "manual"];
+
+function normalizeLocationType(type) {
+  if (type === "gps") return "current";
+  return ALLOWED_LOCATION_TYPES.includes(type) ? type : "search";
+}
+
 function getCachedLocation() {
   try {
     const value =
@@ -26,8 +33,19 @@ function getCachedLocation() {
     const parsed = JSON.parse(value);
 
     if (parsed && typeof parsed === "object") {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-      return parsed;
+      const normalized = {
+        ...parsed,
+        type: normalizeLocationType(parsed.type),
+      };
+
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(normalized)
+      );
+
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+
+      return normalized;
     }
 
     return {
@@ -140,7 +158,7 @@ export default function LocationPicker({
         const user = result.user || result.profile || {};
 
         const saved = {
-          type: user.locationType || "search",
+          type: normalizeLocationType(user.locationType),
           name: user.locationName || "",
           address: user.address || "",
           latitude:
@@ -207,6 +225,10 @@ export default function LocationPicker({
         longitude: data.longitude ?? null,
         locationName: data.name || "",
         address: data.address || "",
+        locationType: data.type || "search",
+        city: data.city || "",
+        state: data.state || "",
+        pinCode: data.pinCode || "",
       });
     } catch (error) {
       console.error("SESSION_LOCATION_UPDATE_ERROR:", error);
@@ -309,7 +331,12 @@ export default function LocationPicker({
     setSaving(true);
 
     try {
-      // Normalize coordinates.
+      const locationType = normalizeLocationType(data.type);
+
+      if (!ALLOWED_LOCATION_TYPES.includes(locationType)) {
+        throw new Error("Invalid location type.");
+      }
+
       const latitude =
         data.latitude != null && data.latitude !== ""
           ? Number(data.latitude)
@@ -325,14 +352,14 @@ export default function LocationPicker({
         longitude !== null &&
         validCoordinates(latitude, longitude);
 
-      // GPS must always have valid coordinates.
-      if (data.type === "gps" && !hasCoordinates) {
+      // Current/GPS location must have valid coordinates.
+      if (locationType === "current" && !hasCoordinates) {
         throw new Error(
           "Invalid GPS coordinates. Please try detecting your location again."
         );
       }
 
-      // Reject invalid partial coordinate values.
+      // Reject partial or invalid coordinates.
       if (
         (latitude !== null || longitude !== null) &&
         !hasCoordinates
@@ -343,7 +370,7 @@ export default function LocationPicker({
       }
 
       const locationData = {
-        type: data.type || "search",
+        type: locationType,
         placeId: data.placeId || null,
         name: data.name || "",
         address: data.address.trim(),
@@ -357,7 +384,7 @@ export default function LocationPicker({
           : {}),
       };
 
-      // Guest user: save only in local storage.
+      // Guest user: save in localStorage.
       if (!isAuthenticated) {
         localStorage.setItem(
           STORAGE_KEY,
@@ -388,21 +415,12 @@ export default function LocationPicker({
               longitude: locationData.longitude,
             }
           : null,
+        city: locationData.city,
+        state: locationData.state,
+        pinCode: locationData.pinCode,
       };
 
-      if (locationData.city) {
-        payload.city = locationData.city;
-      }
-
-      if (locationData.state) {
-        payload.state = locationData.state;
-      }
-
-      if (locationData.pinCode) {
-        payload.pinCode = locationData.pinCode;
-      }
-
-      console.log("ZERiy LOCATION SAVE PAYLOAD:", payload);
+      console.log("ZERIY LOCATION SAVE PAYLOAD:", payload);
 
       const response = await fetch("/api/profile", {
         method: "PUT",
@@ -700,21 +718,20 @@ export default function LocationPicker({
         throw new Error("Invalid GPS coordinates.");
       }
 
-      console.log("ZERiy GPS COORDINATES:", {
+      console.log("ZERIY GPS COORDINATES:", {
         latitude,
         longitude,
         accuracy,
       });
 
-      // Reverse geocode coordinates.
       const addressData = await reverseGeocode(
         latitude,
         longitude
       );
 
-      // Preserve valid GPS coordinates even if reverse geocoding fails.
+      // IMPORTANT: GPS is stored as "current", not "gps".
       const locationData = {
-        type: "gps",
+        type: "current",
         name: addressData?.city || "Current location",
         address:
           addressData?.address ||
@@ -727,7 +744,7 @@ export default function LocationPicker({
         accuracy,
       };
 
-      console.log("ZERiy FINAL GPS LOCATION:", locationData);
+      console.log("ZERIY FINAL GPS LOCATION:", locationData);
 
       const saved = await saveLocation(locationData);
 

@@ -2632,6 +2632,7 @@ const user = session?.user;
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
   <EnableNotifications
     webPushEnabled={user?.webPushEnabled === true}
+    expoPushEnabled={user?.expoPushEnabled === true}
     updateSession={update}
   />
 

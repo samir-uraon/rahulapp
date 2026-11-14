@@ -283,6 +283,7 @@ export default function ProfilePage() {
 <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
   <EnableNotifications
     webPushEnabled={user?.webPushEnabled === true}
+    expoPushEnabled={user?.expoPushEnabled === true}
     updateSession={update}
   />
 
