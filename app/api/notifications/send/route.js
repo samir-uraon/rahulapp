@@ -28,6 +28,37 @@ function getIdVariants(id) {
   return variants;
 }
 
+// Select the channel with the latest preference timestamp.
+function getLatestNotificationPreference(recipient) {
+  const webTime = recipient.webPushUpdatedAt
+    ? new Date(recipient.webPushUpdatedAt).getTime()
+    : 0;
+
+  const expoTime = recipient.expoPushUpdatedAt
+    ? new Date(recipient.expoPushUpdatedAt).getTime()
+    : 0;
+
+  const validWebTime = Number.isFinite(webTime) ? webTime : 0;
+  const validExpoTime = Number.isFinite(expoTime) ? expoTime : 0;
+
+  // Missing or equal timestamps: do not send.
+  if (validWebTime === validExpoTime) {
+    return null;
+  }
+
+  if (validWebTime > validExpoTime) {
+    return {
+      type: "web",
+      enabled: recipient.webPushEnabled === true,
+    };
+  }
+
+  return {
+    type: "expo",
+    enabled: recipient.expoPushEnabled === true,
+  };
+}
+
 // Validate Web Push subscription.
 function isValidSubscription(subscription) {
   return Boolean(
@@ -88,8 +119,6 @@ async function sendExpoPushNotification({
   url,
   notificationId,
 }) {
-  const doctorId = String(recipient._id);
-
   const tokens = Array.isArray(recipient.expoPushTokens)
     ? recipient.expoPushTokens
         .map((item) =>
@@ -162,17 +191,26 @@ async function sendExpoPushNotification({
         return;
       }
 
-      const errorCode = ticket.details?.error;
-
-      if (errorCode === "DeviceNotRegistered") {
+      if (ticket.details?.error === "DeviceNotRegistered") {
         expiredTokens.push(uniqueTokens[index]);
       }
 
       console.error("Expo Push ticket error:", ticket);
     });
 
-    // Remove expired Expo tokens from the doctor's account.
+    // Remove expired Expo tokens without changing preference timestamps.
     if (expiredTokens.length) {
+      await teamCollection.updateOne(
+        { _id: recipient._id },
+        {
+          $pull: {
+            expoPushTokens: {
+              $in: expiredTokens,
+            },
+          },
+        }
+      );
+
       await teamCollection.updateOne(
         { _id: recipient._id },
         {
@@ -180,9 +218,6 @@ async function sendExpoPushNotification({
             expoPushTokens: {
               token: { $in: expiredTokens },
             },
-          },
-          $set: {
-            expoPushUpdatedAt: new Date(),
           },
         }
       );
@@ -215,8 +250,6 @@ async function sendWebPushNotification({
   message,
   url,
 }) {
-  const doctorId = String(recipient._id);
-
   if (recipient.webPushEnabled !== true) {
     return {
       sent: false,
@@ -265,6 +298,7 @@ async function sendWebPushNotification({
     console.error("Web Push delivery error:", error);
 
     // Remove expired Web Push subscriptions.
+    // Do not modify webPushUpdatedAt here.
     if (error.statusCode === 404 || error.statusCode === 410) {
       await teamCollection.updateOne(
         { _id: recipient._id },
@@ -292,7 +326,7 @@ async function sendWebPushNotification({
   }
 }
 
-// Save notification and send both Web Push and Expo Push.
+// Save notification and send only the latest selected push channel.
 async function sendPushNotification({
   db,
   teamCollection,
@@ -322,6 +356,7 @@ async function sendPushNotification({
         webPushSent: false,
         expoPushSent: false,
         skipped: true,
+        selectedPushType: null,
         reason: "Duplicate notification",
       };
     }
@@ -357,6 +392,7 @@ async function sendPushNotification({
         webPushSent: false,
         expoPushSent: false,
         skipped: true,
+        selectedPushType: null,
         reason: "Duplicate notification",
       };
     }
@@ -364,24 +400,53 @@ async function sendPushNotification({
     throw error;
   }
 
-  // Send native Expo Push.
-  const expoResult = await sendExpoPushNotification({
-    teamCollection,
-    recipient,
-    title,
-    message,
-    url,
-    notificationId: insertResult.insertedId,
-  });
+  // Find the latest device preference.
+  const latestPreference =
+    getLatestNotificationPreference(recipient);
 
-  // Send existing Web Push.
-  const webResult = await sendWebPushNotification({
-    teamCollection,
-    recipient,
-    title,
-    message,
-    url,
-  });
+  let expoResult = {
+    sent: false,
+    count: 0,
+    reason: "Expo Push not selected",
+  };
+
+  let webResult = {
+    sent: false,
+    reason: "Web Push not selected",
+  };
+
+  if (!latestPreference) {
+    expoResult.reason =
+      "Notification timestamps are missing or equal";
+
+    webResult.reason =
+      "Notification timestamps are missing or equal";
+  } else if (!latestPreference.enabled) {
+    const reason =
+      `Latest ${latestPreference.type} notification preference is disabled`;
+
+    expoResult.reason = reason;
+    webResult.reason = reason;
+  } else if (latestPreference.type === "expo") {
+    // Only Expo Push.
+    expoResult = await sendExpoPushNotification({
+      teamCollection,
+      recipient,
+      title,
+      message,
+      url,
+      notificationId: insertResult.insertedId,
+    });
+  } else if (latestPreference.type === "web") {
+    // Only Web Push.
+    webResult = await sendWebPushNotification({
+      teamCollection,
+      recipient,
+      title,
+      message,
+      url,
+    });
+  }
 
   const pushSent = expoResult.sent || webResult.sent;
 
@@ -392,10 +457,11 @@ async function sendPushNotification({
     webPushSent: webResult.sent,
     expoPushSent: expoResult.sent,
     expoPushCount: expoResult.count,
+    selectedPushType: latestPreference?.type || null,
     skipped: !pushSent,
     reason: pushSent
-      ? "Notification saved and at least one push channel accepted it"
-      : "Notification saved, but no push channel accepted it",
+      ? `Notification saved and ${latestPreference.type} push accepted`
+      : "Notification saved, but the selected push channel did not send",
     delivery: {
       expo: expoResult.reason,
       web: webResult.reason,
@@ -518,7 +584,7 @@ export async function POST(request) {
       );
     }
 
-    // 5. Save and send notification through both channels.
+    // 5. Save notification and send using latest preference.
     const result = await sendPushNotification({
       db,
       teamCollection,
