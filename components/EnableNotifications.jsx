@@ -7,6 +7,7 @@ import { Bell, LoaderCircle, CheckCircle } from "lucide-react";
 
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+
   const base64 = (base64String + padding)
     .replace(/-/g, "+")
     .replace(/_/g, "/");
@@ -71,7 +72,7 @@ function getBrowserSupport() {
   return null;
 }
 
-// Native Expo token bridge
+// Native Expo token bridge.
 function requestNativePushToken() {
   return new Promise((resolve, reject) => {
     const bridge = window.ReactNativeWebView;
@@ -102,7 +103,11 @@ function requestNativePushToken() {
 
     const handleError = (event) => {
       cleanup();
-      reject(new Error(event.detail || "Native notification registration failed."));
+      reject(
+        new Error(
+          event.detail || "Native notification registration failed."
+        )
+      );
     };
 
     timeout = setTimeout(() => {
@@ -125,20 +130,25 @@ export default function EnableNotifications({
   const { data: session, status, update } = useSession();
 
   const [loading, setLoading] = useState(false);
-  const [webEnabled, setWebEnabled] = useState(Boolean(webPushEnabled));
-  const [expoEnabled, setExpoEnabled] = useState(Boolean(expoPushEnabled));
+  const [webEnabled, setWebEnabled] = useState(
+    Boolean(webPushEnabled)
+  );
+  const [expoEnabled, setExpoEnabled] = useState(
+    Boolean(expoPushEnabled)
+  );
   const [message, setMessage] = useState("");
 
   const syncSession = updateSession || update;
 
-  // Detect Expo WebView
+  // Detect native Expo WebView.
   const isNativeApp =
     typeof window !== "undefined" &&
     typeof window.ReactNativeWebView?.postMessage === "function";
 
-  // Select the correct notification setting
+  // Device-specific notification setting.
   const enabled = isNativeApp ? expoEnabled : webEnabled;
 
+  // Keep local state synchronized with server props.
   useEffect(() => {
     setWebEnabled(Boolean(webPushEnabled));
   }, [webPushEnabled]);
@@ -240,7 +250,8 @@ export default function EnableNotifications({
       throw new Error("VAPID public key is missing.");
     }
 
-    const applicationServerKey = urlBase64ToUint8Array(publicKey);
+    const applicationServerKey =
+      urlBase64ToUint8Array(publicKey);
 
     let permission = Notification.permission;
 
@@ -293,13 +304,16 @@ export default function EnableNotifications({
       });
     }
 
-    const response = await fetch("/api/notifications/subscribe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      cache: "no-store",
-      body: JSON.stringify(subscription.toJSON()),
-    });
+    const response = await fetch(
+      "/api/notifications/subscribe",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        body: JSON.stringify(subscription.toJSON()),
+      }
+    );
 
     const data = await response.json().catch(() => ({}));
 
@@ -321,20 +335,25 @@ export default function EnableNotifications({
     let subscription = null;
 
     if ("serviceWorker" in navigator) {
-      registration = await navigator.serviceWorker.getRegistration("/");
+      registration =
+        await navigator.serviceWorker.getRegistration("/");
+
       subscription =
         await registration?.pushManager.getSubscription();
     }
 
-    const response = await fetch("/api/notifications/subscribe", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      cache: "no-store",
-      body: JSON.stringify(
-        subscription ? subscription.toJSON() : {}
-      ),
-    });
+    const response = await fetch(
+      "/api/notifications/subscribe",
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        body: JSON.stringify(
+          subscription ? subscription.toJSON() : {}
+        ),
+      }
+    );
 
     const data = await response.json().catch(() => ({}));
 
@@ -370,6 +389,12 @@ export default function EnableNotifications({
         throw new Error("Please login first.");
       }
 
+      // Owners cannot manage notifications through this component.
+      if (session.user.role === "owner") {
+        throw new Error("Notification settings are unavailable.");
+      }
+
+      // Android / Expo app: Expo Push only.
       if (isNativeApp) {
         if (enabled) {
           await disableNativeNotifications();
@@ -377,6 +402,7 @@ export default function EnableNotifications({
           await enableNativeNotifications();
         }
       } else {
+        // Browser: Web Push only.
         if (enabled) {
           await disableWebNotifications();
         } else {
@@ -391,7 +417,11 @@ export default function EnableNotifications({
     }
   }
 
-  if (status !== "authenticated" || !session?.user) {
+  if (
+    status !== "authenticated" ||
+    !session?.user ||
+    session.user.role === "owner"
+  ) {
     return null;
   }
 
@@ -412,7 +442,10 @@ export default function EnableNotifications({
         ) : enabled ? (
           <CheckCircle size={17} />
         ) : (
-          <Bell size={17} className="transition-transform group-hover:rotate-12" />
+          <Bell
+            size={17}
+            className="transition-transform group-hover:rotate-12"
+          />
         )}
 
         <span>
