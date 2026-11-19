@@ -25,6 +25,8 @@ import {
   Calendar,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import EnableNotifications from "@/components/EnableNotifications";
 
@@ -1745,7 +1747,10 @@ function RescheduleModal({ booking, onClose, onConfirm, loading }) {
 }
 
 
+
 function BookingCard({ booking, now, onCancel, cancelling, onRescheduleClick }) {
+  const [expanded, setExpanded] = useState(false);
+
   const { start, end } = getSlotTimes(booking);
 
   const patient =
@@ -1796,18 +1801,18 @@ function BookingCard({ booking, now, onCancel, cancelling, onRescheduleClick }) 
   const duration = getDuration(booking);
   const paymentAmount = getPaymentAmount(booking);
 
-const isEmergency =
-  String(booking.priority || "").trim().toLowerCase() === "emergency";
+  const isEmergency =
+    String(booking.priority || "").trim().toLowerCase() === "emergency";
 
-const canShowQueue =
-  !isEmergency &&
-  [
-    "waiting",
-    "confirmed",
-    "in-progress",
-    "serving",
-    "your-turn",
-  ].includes(status);
+  const canShowQueue =
+    !isEmergency &&
+    [
+      "waiting",
+      "confirmed",
+      "in-progress",
+      "serving",
+      "your-turn",
+    ].includes(status);
 
   const token =
     booking.tokenNumber ||
@@ -1833,7 +1838,9 @@ const canShowQueue =
       booking.amount;
 
     if (rawVal === undefined || rawVal === null || rawVal === "") return null;
+
     const numericVal = Number(rawVal) / 100;
+
     if (!Number.isFinite(numericVal) || numericVal < 0) return null;
 
     return new Intl.NumberFormat("en-IN", {
@@ -1869,6 +1876,8 @@ const canShowQueue =
 
   return (
     <article className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md sm:p-6">
+
+      {/* HEADER - Always visible */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -1877,15 +1886,18 @@ const canShowQueue =
               Token {token}
             </h3>
           </div>
+
           <p className="mt-1 break-words text-sm text-gray-500">
             {serviceName}
           </p>
+
           {doctorName && (
             <p className="mt-1 flex items-center gap-1.5 text-sm text-gray-700">
               <Stethoscope size={15} className="shrink-0 text-indigo-500" />
               {doctorName}
             </p>
           )}
+
           {booking.bookingReference && (
             <p className="mt-1 break-all text-xs text-gray-400">
               Ref: {booking.bookingReference}
@@ -1900,6 +1912,7 @@ const canShowQueue =
         />
       </div>
 
+      {/* DOCTOR ACTION - Always visible */}
       {isPendingDoctorAction && (
         <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
           <div className="flex items-center gap-2">
@@ -1908,59 +1921,15 @@ const canShowQueue =
               Action Required from Doctor
             </p>
           </div>
+
           <p className="mt-1 text-xs text-amber-800">
-            The doctor has updated this booking to pending. You are entitled to a full refund or a free reschedule with this doctor.
+            The doctor has updated this booking to pending. You are entitled
+            to a full refund or a free reschedule with this doctor.
           </p>
         </div>
       )}
 
-      {status === "cancelled" && (
-        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
-          <div className="flex items-center gap-2">
-            <XCircle size={17} className="shrink-0 text-red-600" />
-            <p className="text-sm font-semibold text-red-800">
-              {getCancellationLabel(booking)}
-            </p>
-          </div>
-          <p className="mt-1 text-sm text-red-700">
-            {getCancellationDescription(booking)}
-          </p>
-          <div className="mt-3 rounded-lg border border-red-100 bg-white/80 p-3">
-            <p className="text-xs font-semibold text-gray-600">
-              Booking and cancellation timeline
-            </p>
-            <p className="mt-1 text-xs text-gray-700">
-              Booked on: {formatDateTime(getBookedAtValue(booking))}
-            </p>
-            <p className="mt-1 text-xs text-gray-700">
-              Cancelled on:{" "}
-              {formatDateTime(
-                booking.cancelledAt ||
-                  booking.canceledAt ||
-                  booking.cancellation?.cancelledAt ||
-                  booking.cancellation?.canceledAt
-              )}
-            </p>
-            {(() => {
-              const cancellationWindow = getCancellationWindowInfo(booking);
-              return (
-                <p
-                  className={`mt-2 text-sm font-semibold ${
-                    cancellationWindow.withinTwoHours === true
-                      ? "text-green-700"
-                      : cancellationWindow.withinTwoHours === false
-                      ? "text-red-700"
-                      : "text-amber-700"
-                  }`}
-                >
-                  {cancellationWindow.message}
-                </p>
-              );
-            })()}
-          </div>
-        </div>
-      )}
-
+      {/* LIVE QUEUE - Always visible */}
       {canShowQueue && (
         <div className="mt-5 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
           <div className="flex items-center gap-2">
@@ -1969,6 +1938,7 @@ const canShowQueue =
               Live queue information
             </h4>
           </div>
+
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="rounded-lg bg-white p-3">
               <p className="text-xs text-gray-500">People ahead</p>
@@ -1976,6 +1946,7 @@ const canShowQueue =
                 {peopleAhead === null ? "—" : peopleAhead}
               </p>
             </div>
+
             <div className="rounded-lg bg-white p-3">
               <p className="text-xs text-gray-500">Doctor's Session</p>
               <p
@@ -1990,16 +1961,8 @@ const canShowQueue =
         </div>
       )}
 
+      {/* BASIC DETAILS - Always visible */}
       <div className="mt-5 grid gap-5 sm:grid-cols-2">
-        <div className="flex items-start gap-3">
-          <Clock size={18} className="mt-0.5 shrink-0 text-indigo-600" />
-          <div>
-            <p className="text-xs text-gray-500">Booked on</p>
-            <p className="mt-1 text-sm font-medium text-gray-800">
-              {formatDateTime(getBookedAtValue(booking))}
-            </p>
-          </div>
-        </div>
 
         <div className="flex items-start gap-3">
           <CalendarDays size={18} className="mt-0.5 shrink-0 text-indigo-600" />
@@ -2015,11 +1978,13 @@ const canShowQueue =
           <Clock size={18} className="mt-0.5 shrink-0 text-indigo-600" />
           <div>
             <p className="text-xs text-gray-500">Checkup time</p>
+
             {start && (
               <p className="mt-1 text-sm font-medium text-gray-800">
                 {end ? `${start} - ${end}` : start}
               </p>
             )}
+
             {duration !== null && (
               <p className="mt-1 text-xs text-gray-500">
                 Consultation duration: {duration} minutes
@@ -2032,9 +1997,11 @@ const canShowQueue =
           <User size={18} className="mt-0.5 shrink-0 text-indigo-600" />
           <div>
             <p className="text-xs text-gray-500">Patient</p>
+
             <p className="mt-1 break-words text-sm font-medium text-gray-800">
               {patientName}
             </p>
+
             <p className="text-xs capitalize text-gray-500">
               {patientType}
               {patientAge != null && ` · ${patientAge} years`}
@@ -2043,172 +2010,301 @@ const canShowQueue =
           </div>
         </div>
 
-        {(clinicName || address || mapsUrl) && (
-          <div className="flex items-start gap-3">
-            <MapPin size={18} className="mt-0.5 shrink-0 text-indigo-600" />
-            <div className="min-w-0">
-              <p className="text-xs text-gray-500">Clinic</p>
-              <p className="mt-1 break-words text-sm font-medium text-gray-800">
-                {clinicName || "Clinic"}
-              </p>
-              {address && (
-                <p className="mt-1 break-words text-xs text-gray-500">
-                  {address}
-                </p>
-              )}
-              {mapsUrl && (
-                <a
-                  href={mapsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 transition hover:text-indigo-800 hover:underline"
-                >
-                  <Navigation size={11} />
-                  Get Directions
-                </a>
-              )}
-            </div>
-          </div>
-        )}
-
-        {booking.priority && (
-          <div className="flex items-start gap-3">
-            <AlertCircle size={18} className="mt-0.5 shrink-0 text-indigo-600" />
-            <div>
-              <p className="text-xs text-gray-500">Queue priority</p>
-              <p className="mt-1 text-sm font-medium capitalize text-gray-800">
-                {booking.priority}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {paymentAmount && (
-          <div className="flex items-start gap-3">
-            <CreditCard size={18} className="mt-0.5 shrink-0 text-indigo-600" />
-            <div>
-              <p className="text-xs text-gray-500">Payment amount</p>
-              <p className="mt-1 text-sm font-semibold text-gray-800">
-                {paymentAmount}
-              </p>
-            </div>
-          </div>
-        )}
       </div>
 
-      {booking.priority === "emergency" && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-          Emergency priority
-        </div>
-      )}
+      {/* READ MORE SECTION */}
+      {expanded && (
+        <div className="animate-in fade-in duration-300">
 
-      {booking.paymentStatus && booking.paymentStatus !== "unknown" && (
-        <div className="mt-4 border-t border-gray-100 pt-3">
-          <span className="text-xs text-gray-500">Payment status: </span>
-          <span className="text-xs font-semibold capitalize text-gray-700">
-            {booking.paymentStatus}
-          </span>
-        </div>
-      )}
+          {/* CANCELLATION INFORMATION */}
+          {status === "cancelled" && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+              <div className="flex items-center gap-2">
+                <XCircle size={17} className="shrink-0 text-red-600" />
+                <p className="text-sm font-semibold text-red-800">
+                  {getCancellationLabel(booking)}
+                </p>
+              </div>
 
-      {showRefundCard && (
-        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-          <p className="text-xs text-gray-500">Refund status</p>
-          <p className="mt-1 text-sm font-semibold capitalize text-gray-800">
-            {refundStatus ? refundStatus.replaceAll("_", " ") : "Completed"}
-          </p>
-          {formattedRefundAmount && (
-            <p className="mt-1 text-xs font-medium text-gray-700">
-              Refund amount: {formattedRefundAmount}
-            </p>
-          )}
-          {booking.refundExpectedDays && (
-            <p className="mt-1 text-xs text-gray-500">
-              Expected time: {booking.refundExpectedDays}
-            </p>
-          )}
-          {booking.refundInitiatedAt && (
-            <p className="mt-1 text-xs text-gray-500">
-              Initiated: {formatDate(booking.refundInitiatedAt)}
-            </p>
-          )}
-          {booking.refundId && (
-            <p className="mt-1 break-all text-xs text-gray-500">
-              Refund ID: {booking.refundId}
-            </p>
-          )}
-        </div>
-      )}
+              <p className="mt-1 text-sm text-red-700">
+                {getCancellationDescription(booking)}
+              </p>
 
-      {(cancellationAllowed || isPendingDoctorAction) && (
-        <div className="mt-5 border-t border-gray-100 pt-4">
-          <div
-            className={`mb-3 rounded-xl border p-3 ${
-              cancellationEligibility.refundable === true
-                ? "border-green-200 bg-green-50"
-                : cancellationEligibility.refundable === false
-                ? "border-amber-200 bg-amber-50"
-                : "border-gray-200 bg-gray-50"
-            }`}
-          >
-            <p
-              className={`text-sm font-semibold ${
-                cancellationEligibility.refundable === true
-                  ? "text-green-800"
-                  : cancellationEligibility.refundable === false
-                  ? "text-amber-800"
-                  : "text-gray-700"
-              }`}
-            >
-              {cancellationEligibility.refundable === true
-                ? "Refund eligible"
-                : cancellationEligibility.refundable === false
-                ? "Cancellation without refund"
-                : "Refund eligibility"}
-            </p>
-            <p className="mt-1 text-xs text-gray-700">
-              {cancellationEligibility.message}
-            </p>
-          </div>
+              <div className="mt-3 rounded-lg border border-red-100 bg-white/80 p-3">
+                <p className="text-xs font-semibold text-gray-600">
+                  Booking and cancellation timeline
+                </p>
 
-          <div className="flex flex-col gap-2 sm:flex-row">
-            {isPendingDoctorAction && (
-              <button
-                type="button"
-                onClick={() => onRescheduleClick?.(booking)}
-                disabled={cancelling}
-                className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-60"
-              >
-                <Calendar size={16} />
-                Reschedule for Free
-              </button>
+                <p className="mt-1 text-xs text-gray-700">
+                  Booked on: {formatDateTime(getBookedAtValue(booking))}
+                </p>
+
+                <p className="mt-1 text-xs text-gray-700">
+                  Cancelled on:{" "}
+                  {formatDateTime(
+                    booking.cancelledAt ||
+                      booking.canceledAt ||
+                      booking.cancellation?.cancelledAt ||
+                      booking.cancellation?.canceledAt
+                  )}
+                </p>
+
+                {(() => {
+                  const cancellationWindow =
+                    getCancellationWindowInfo(booking);
+
+                  return (
+                    <p
+                      className={`mt-2 text-sm font-semibold ${
+                        cancellationWindow.withinTwoHours === true
+                          ? "text-green-700"
+                          : cancellationWindow.withinTwoHours === false
+                          ? "text-red-700"
+                          : "text-amber-700"
+                      }`}
+                    >
+                      {cancellationWindow.message}
+                    </p>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* ADDITIONAL DETAILS */}
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+
+            <div className="flex items-start gap-3">
+              <Clock size={18} className="mt-0.5 shrink-0 text-indigo-600" />
+              <div>
+                <p className="text-xs text-gray-500">Booked on</p>
+                <p className="mt-1 text-sm font-medium text-gray-800">
+                  {formatDateTime(getBookedAtValue(booking))}
+                </p>
+              </div>
+            </div>
+
+            {(clinicName || address || mapsUrl) && (
+              <div className="flex items-start gap-3">
+                <MapPin size={18} className="mt-0.5 shrink-0 text-indigo-600" />
+
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500">Clinic</p>
+
+                  <p className="mt-1 break-words text-sm font-medium text-gray-800">
+                    {clinicName || "Clinic"}
+                  </p>
+
+                  {address && (
+                    <p className="mt-1 break-words text-xs text-gray-500">
+                      {address}
+                    </p>
+                  )}
+
+                  {mapsUrl && (
+                    <a
+                      href={mapsUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 transition hover:text-indigo-800 hover:underline"
+                    >
+                      <Navigation size={11} />
+                      Get Directions
+                    </a>
+                  )}
+                </div>
+              </div>
             )}
 
-            <button
-              type="button"
-              onClick={() => onCancel?.(booking)}
-              disabled={cancelling || !bookingId}
-              className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <XCircle size={16} />
-              {cancelling
-                ? "Processing..."
-                : isPendingDoctorAction
-                ? "Get Refund"
-                : "Cancel Booking"}
-            </button>
+            {booking.priority && (
+              <div className="flex items-start gap-3">
+                <AlertCircle
+                  size={18}
+                  className="mt-0.5 shrink-0 text-indigo-600"
+                />
+                <div>
+                  <p className="text-xs text-gray-500">Queue priority</p>
+                  <p className="mt-1 text-sm font-medium capitalize text-gray-800">
+                    {booking.priority}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {paymentAmount && (
+              <div className="flex items-start gap-3">
+                <CreditCard
+                  size={18}
+                  className="mt-0.5 shrink-0 text-indigo-600"
+                />
+                <div>
+                  <p className="text-xs text-gray-500">Payment amount</p>
+                  <p className="mt-1 text-sm font-semibold text-gray-800">
+                    {paymentAmount}
+                  </p>
+                </div>
+              </div>
+            )}
+
           </div>
 
-          <p className="mt-2 text-xs text-gray-500">
-            {isPendingDoctorAction
-              ? "Because the doctor initiated this change, you can either select a new slot for free or request a complete refund."
-              : "You can cancel before the doctor starts the session. Refund eligibility depends on whether cancellation happens within 2 hours of booking creation."}
-          </p>
+          {/* EMERGENCY PRIORITY */}
+          {booking.priority === "emergency" && (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+              Emergency priority
+            </div>
+          )}
+
+          {/* PAYMENT STATUS */}
+          {booking.paymentStatus &&
+            booking.paymentStatus !== "unknown" && (
+              <div className="mt-4 border-t border-gray-100 pt-3">
+                <span className="text-xs text-gray-500">
+                  Payment status:{" "}
+                </span>
+                <span className="text-xs font-semibold capitalize text-gray-700">
+                  {booking.paymentStatus}
+                </span>
+              </div>
+            )}
+
+          {/* REFUND DETAILS */}
+          {showRefundCard && (
+            <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+              <p className="text-xs text-gray-500">Refund status</p>
+
+              <p className="mt-1 text-sm font-semibold capitalize text-gray-800">
+                {refundStatus
+                  ? refundStatus.replaceAll("_", " ")
+                  : "Completed"}
+              </p>
+
+              {formattedRefundAmount && (
+                <p className="mt-1 text-xs font-medium text-gray-700">
+                  Refund amount: {formattedRefundAmount}
+                </p>
+              )}
+
+              {booking.refundExpectedDays && (
+                <p className="mt-1 text-xs text-gray-500">
+                  Expected time: {booking.refundExpectedDays}
+                </p>
+              )}
+
+              {booking.refundInitiatedAt && (
+                <p className="mt-1 text-xs text-gray-500">
+                  Initiated: {formatDate(booking.refundInitiatedAt)}
+                </p>
+              )}
+
+              {booking.refundId && (
+                <p className="mt-1 break-all text-xs text-gray-500">
+                  Refund ID: {booking.refundId}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* CANCELLATION AND RESCHEDULE ACTIONS */}
+          {(cancellationAllowed || isPendingDoctorAction) && (
+            <div className="mt-5 border-t border-gray-100 pt-4">
+
+              <div
+                className={`mb-3 rounded-xl border p-3 ${
+                  cancellationEligibility.refundable === true
+                    ? "border-green-200 bg-green-50"
+                    : cancellationEligibility.refundable === false
+                    ? "border-amber-200 bg-amber-50"
+                    : "border-gray-200 bg-gray-50"
+                }`}
+              >
+                <p
+                  className={`text-sm font-semibold ${
+                    cancellationEligibility.refundable === true
+                      ? "text-green-800"
+                      : cancellationEligibility.refundable === false
+                      ? "text-amber-800"
+                      : "text-gray-700"
+                  }`}
+                >
+                  {cancellationEligibility.refundable === true
+                    ? "Refund eligible"
+                    : cancellationEligibility.refundable === false
+                    ? "Cancellation without refund"
+                    : "Refund eligibility"}
+                </p>
+
+                <p className="mt-1 text-xs text-gray-700">
+                  {cancellationEligibility.message}
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row">
+
+                {isPendingDoctorAction && (
+                  <button
+                    type="button"
+                    onClick={() => onRescheduleClick?.(booking)}
+                    disabled={cancelling}
+                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-60"
+                  >
+                    <Calendar size={16} />
+                    Reschedule for Free
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => onCancel?.(booking)}
+                  disabled={cancelling || !bookingId}
+                  className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <XCircle size={16} />
+                  {cancelling
+                    ? "Processing..."
+                    : isPendingDoctorAction
+                    ? "Get Refund"
+                    : "Cancel Booking"}
+                </button>
+
+              </div>
+
+              <p className="mt-2 text-xs text-gray-500">
+                {isPendingDoctorAction
+                  ? "Because the doctor initiated this change, you can either select a new slot for free or request a complete refund."
+                  : "You can cancel before the doctor starts the session. Refund eligibility depends on whether cancellation happens within 2 hours of booking creation."}
+              </p>
+            </div>
+          )}
+
         </div>
       )}
+
+      {/* READ MORE / SHOW LESS BUTTON */}
+      <div className="mt-5 border-t border-gray-100 pt-4">
+        <button
+          type="button"
+          onClick={() => setExpanded((prev) => !prev)}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-100"
+        >
+          {expanded ? (
+            <>
+              Show Less
+              <ChevronUp size={16} />
+            </>
+          ) : (
+            <>
+              Read More
+              <ChevronDown size={16} />
+            </>
+          )}
+        </button>
+      </div>
+
     </article>
   );
 }
+
 
 function EmptyState({ title, description }) {
   return (
@@ -2629,18 +2725,20 @@ const user = session?.user;
               </p>
             </div>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-  <EnableNotifications
-    webPushEnabled={user?.webPushEnabled === true}
-    expoPushEnabled={user?.expoPushEnabled === true}
-    updateSession={update}
-  />
+          <div className="flex w-full max-w-md flex-col gap-4 gap-y-3 md:flex-row md:items-center">
+  <div className="w-full flex-1">
+    <EnableNotifications
+      webPushEnabled={user?.webPushEnabled === true}
+      expoPushEnabled={user?.expoPushEnabled === true}
+      updateSession={update}
+    />
+  </div>
 
   <button
     type="button"
     onClick={() => fetchBookings(true)}
     disabled={refreshing}
-    className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+    className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 md:w-auto md:flex-1"
   >
     <RefreshCw
       size={16}

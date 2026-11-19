@@ -65,7 +65,7 @@ export default function Header({ user, showBack = false }) {
         <div className="flex shrink-0 items-center gap-5 sm:gap-4">
 
         {/* PLANS / SUBSCRIPTION */}
-<Link
+{/*<Link
   href="/plans"
   aria-label="View subscription plans"
   title="Subscription Plans"
@@ -90,7 +90,7 @@ export default function Header({ user, showBack = false }) {
   <span className="hidden whitespace-nowrap text-sm font-semibold sm:inline">
     Plans
   </span>
-</Link>
+</Link>*/}
 
           {/* DESKTOP PROFILE */}
           <Link
@@ -127,7 +127,7 @@ export default function Header({ user, showBack = false }) {
             aria-label={`Open profile for ${userName}`}
             title="My Profile"
             className="
-              relative inline-flex h-9 w-9 shrink-0 items-center
+              relative inline-flex h-9 w-9 shrink-0 items-center mr-2
               justify-center rounded-full border-2 border-indigo-200
               bg-indigo-600 text-md font-bold text-white
               shadow-sm transition-all duration-200

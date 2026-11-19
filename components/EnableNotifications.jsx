@@ -425,51 +425,51 @@ export default function EnableNotifications({
     return null;
   }
 
-  return (
-    <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-start">
-      <button
-        type="button"
-        onClick={handleToggle}
-        disabled={loading}
-        className={`group inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-semibold transition-all duration-200 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto ${
-          enabled
-            ? "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
-            : "bg-violet-600 text-white shadow-sm shadow-violet-200 hover:bg-violet-700"
+return (
+  <div className="flex w-full flex-col items-stretch gap-2">
+    <button
+      type="button"
+      onClick={handleToggle}
+      disabled={loading}
+      className={`group inline-flex min-h-[42px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-semibold transition-all duration-200 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 ${
+        enabled
+          ? "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+          : "bg-violet-600 text-white shadow-sm shadow-violet-200 hover:bg-violet-700"
+      }`}
+    >
+      {loading ? (
+        <LoaderCircle size={17} className="animate-spin shrink-0" />
+      ) : enabled ? (
+        <CheckCircle size={17} className="shrink-0" />
+      ) : (
+        <Bell
+          size={17}
+          className="shrink-0 transition-transform group-hover:rotate-12"
+        />
+      )}
+
+      <span>
+        {loading
+          ? "Please wait..."
+          : enabled
+            ? "Notifications Enabled"
+            : "Enable Notifications"}
+      </span>
+    </button>
+
+    {message && (
+      <p
+        role="status"
+        aria-live="polite"
+        className={`flex items-start gap-1.5 text-xs ${
+          message.includes("successfully")
+            ? "text-green-600"
+            : "text-red-500"
         }`}
       >
-        {loading ? (
-          <LoaderCircle size={17} className="animate-spin" />
-        ) : enabled ? (
-          <CheckCircle size={17} />
-        ) : (
-          <Bell
-            size={17}
-            className="transition-transform group-hover:rotate-12"
-          />
-        )}
-
-        <span>
-          {loading
-            ? "Please wait..."
-            : enabled
-              ? "Notifications Enabled"
-              : "Enable Notifications"}
-        </span>
-      </button>
-
-      {message && (
-        <p
-          role="status"
-          aria-live="polite"
-          className={`flex items-start gap-1.5 text-xs ${
-            message.includes("successfully")
-              ? "text-green-600"
-              : "text-red-500"
-          }`}
-        >
-          {message}
-        </p>
-      )}
-    </div>
-  );
+        {message}
+      </p>
+    )}
+  </div>
+);
 }
