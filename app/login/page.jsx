@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState } from "react";
@@ -5,6 +6,7 @@ import { signIn } from "next-auth/react";
 import { toast } from "react-hot-toast";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 
 export default function Login() {
   const [formData, setFormData] = useState({
@@ -28,7 +30,7 @@ export default function Login() {
   const validateIdentifier = (value) => {
     const identifier = value.trim();
 
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const mobileRegex = /^[6-9]\d{9}$/;
 
     return (
@@ -58,122 +60,130 @@ export default function Login() {
       return;
     }
 
-  
-
     setLoading(true);
 
-  try {
-  const result = await signIn("credentials", {
-    identifier,
-    password: formData.password,
-    redirect: false,
-  });
+    try {
+      const result = await signIn("credentials", {
+        identifier,
+        password: formData.password,
+        redirect: false,
+      });
 
-  if (result?.error) {
-    // Check whether the account needs email verification
-    if (result.error === "EMAIL_NOT_VERIFIED") {
-      toast.error("Please verify your email first.");
+      if (result?.error) {
+        if (result.error === "EMAIL_NOT_VERIFIED") {
+          toast.error("Please verify your email first.");
 
-      router.push(
-        `/verify-otp?email=${encodeURIComponent(identifier.trim().toLowerCase())}`
-      );
+          router.push(
+            `/verify-otp?email=${encodeURIComponent(
+              identifier.trim().toLowerCase()
+            )}`
+          );
 
-      return;
+          setLoading(false);
+          return;
+        }
+
+        if (result.error === "ACCOUNT_EXPIRED") {
+          toast.error(
+            "Your unverified account has expired. Please create a new account."
+          );
+
+          router.push("/signup");
+          setLoading(false);
+          return;
+        }
+
+        toast.error("Invalid email/phone or password.");
+        setLoading(false);
+        return;
+      }
+
+      if (result?.ok) {
+        toast.success("Login successful!");
+        window.location.href = "/";
+      } else {
+        toast.error("Unable to login. Please try again.");
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error("Login error:", error);
+      toast.error("Something went wrong.");
+      setLoading(false);
     }
-
-    // Account expired
-    if (result.error === "ACCOUNT_EXPIRED") {
-      toast.error("Your unverified account has expired. Please create a new account.");
-
-      router.push("/signup");
-      return;
-    }
-
-    toast.error("Invalid email/phone or password");
-    setLoading(false);
-    return;
-  }
-
-  if (result?.ok) {
-    toast.success("Login successful!");
-    window.location.href = "/";
-  }
-} catch (error) {
-  console.error("Login error:", error);
-  toast.error("Something went wrong.");
-  setLoading(false);
-}
   };
 
-const handleGoogleLogin = async () => {
-  setLoading(true);
+  const handleGoogleLogin = async () => {
+    setLoading(true);
 
-  try {
-    // If login page is running inside the ZERIY React Native app
-    if (window.ReactNativeWebView) {
-      window.ReactNativeWebView.postMessage("ZERIY_GOOGLE_LOGIN");
-      return;
+    try {
+      // Native Zeriy app login
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(
+          "ZERIY_GOOGLE_LOGIN"
+        );
+        return;
+      }
+
+      // Normal browser login
+      await signIn("google", {
+        callbackUrl: "/",
+      });
+    } catch (error) {
+      console.error("Google login error:", error);
+      toast.error("Google login failed.");
+      setLoading(false);
     }
-
-    // Normal website browser login
-    await signIn("google", {
-      callbackUrl: "/",
-    });
-  } catch (error) {
-    console.error("Google login error:", error);
-    toast.error("Google login failed.");
-    setLoading(false);
-  }
-};
+  };
 
   const handleBack = () => {
     window.location.href = "/";
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-3 py-5 sm:px-6 sm:py-8">
-      <div className="mx-auto w-full max-w-md">
-
-        <div className="mx-auto mb-5 w-full max-w-md">
-  <button
-    type="button"
-    onClick={handleBack}
-    className="
-      group inline-flex items-center gap-2
-      rounded-xl border border-slate-200
-      bg-white px-4 py-2.5
-      text-sm font-semibold text-slate-600
-      shadow-sm transition-all duration-200
-      hover:border-indigo-200
-      hover:bg-indigo-50
-      hover:text-indigo-700
-      hover:shadow-md
-      active:scale-95
-    "
-  >
-    <ArrowLeft
-      size={17}
-      className="transition-transform duration-200 group-hover:-translate-x-1"
-    />
-    Home
-  </button>
-</div>
-
-        {/* Login Card */}
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-5 shadow-sm sm:rounded-3xl sm:p-8">
-
+        <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6 sm:py-10">
+        
+      <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-md items-center justify-center sm:min-h-[calc(100vh-5rem)]">
+        <div className="w-full rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:rounded-3xl sm:p-8">
+{/* Home Button */}
+        <div className="mx-auto mb-1 w-full max-w-md">
+          <button
+          type="button"
+          onClick={handleBack}
+          aria-label="Go back"
+          className="mb-5 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+        >
+          <ArrowLeft size={20} />
+        </button>
+        </div>
           {/* Header */}
-          <div className="mb-5 text-center sm:mb-7">
-            <h2 className="text-xl font-black tracking-tight text-slate-900 sm:text-2xl">
-              Welcome to Zeriy
-            </h2>
+          <div className="mb-7 text-center">
 
-            <p className="mx-auto mt-1.5 max-w-xs text-[11px] leading-relaxed text-slate-500 sm:text-sm">
-Made simpler and Much faster            </p>
+            {/* Zeriy Logo */}
+            <div className="mx-auto mb-4 flex h-[60px] w-[60px] items-center justify-center overflow-hidden rounded-2xl bg-indigo-600 shadow-lg shadow-indigo-600/20">
+            <Image
+              src="/logo.png"
+              alt="Zeriy Logo"
+              width={52}
+              height={52}
+              className="h-full w-full object-contain"
+              priority
+            />
+            </div>
+
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+              Welcome to Zeriy
+            </h1>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Sign in to continue to your account.
+            </p>
+
+        
           </div>
 
           {/* Login / Signup Toggle */}
           <div className="mb-5 flex rounded-xl bg-slate-100 p-1 text-xs font-semibold sm:mb-6 sm:text-sm">
+
             <button
               type="button"
               className="flex min-h-[30px] flex-1 items-center justify-center rounded-lg bg-white px-2 py-2.5 font-bold text-indigo-600 shadow-sm"
@@ -183,9 +193,7 @@ Made simpler and Much faster            </p>
 
             <button
               type="button"
-              onClick={() => {
-                window.location.href = "/signup";
-              }}
+              onClick={() => router.push("/signup")}
               className="flex min-h-[30px] flex-1 items-center justify-center rounded-lg px-2 py-2.5 text-slate-600 transition hover:text-indigo-600 active:scale-[0.98]"
             >
               Create Account
@@ -272,47 +280,47 @@ Made simpler and Much faster            </p>
             </div>
 
             {/* Forgot Password */}
-            <div className="-mt-4 flex justify-end">
+            <div className="-mt-6 flex justify-end">
               <button
                 type="button"
-                onClick={() => {
-                  window.location.href = "/forgot-password";
-                }}
+                onClick={() => router.push("/forgot-password")}
                 className="min-h-[32px] px-1 text-xs font-semibold text-indigo-600 transition hover:text-indigo-700 hover:underline active:scale-95 sm:text-sm"
               >
                 Forgot Password?
               </button>
             </div>
-            <div className="mt-5 flex items-start gap-2">
-  <input
-    type="checkbox"
-    required
-    name="agree"
-    id="agree"
-    className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-indigo-600  "
-  />
 
-  <label
-    htmlFor="agree"
-    className="mt-1 text-sm leading-5 text-gray-600"
-  >
-    I agree to the{" "}
-    <a
-      href="/terms"
-      className="font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
-    >
-      Terms & Conditions
-    </a>{" "}
-    and{" "}
-    <a
-      href="/privacy"
-      className="font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
-    >
-      Privacy Policy
-    </a>
-    .
-  </label>
-</div>
+            {/* Terms & Conditions */}
+            <div className="mt-5 flex items-start gap-2">
+              <input
+                type="checkbox"
+                required
+                name="agree"
+                id="agree"
+                className="mt-1 h-4 w-4 shrink-0 cursor-pointer rounded border-gray-300 text-indigo-600"
+              />
+
+              <label
+                htmlFor="agree"
+                className="mt-1 text-sm leading-5 text-gray-600"
+              >
+                I agree to the{" "}
+                <a
+                  href="/terms"
+                  className="font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+                >
+                  Terms & Conditions
+                </a>{" "}
+                and{" "}
+                <a
+                  href="/privacy"
+                  className="font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
+                >
+                  Privacy Policy
+                </a>
+                .
+              </label>
+            </div>
 
             {/* Login Button */}
             <button
@@ -381,6 +389,7 @@ Made simpler and Much faster            </p>
               💡 Login to book tokens and manage your appointments.
             </p>
           </div>
+
         </div>
       </div>
     </div>

@@ -2716,37 +2716,42 @@ const user = session?.user;
       <Header showBack={true} />
 
       <main className="min-h-screen bg-gray-50 px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-5xl">
-          <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">My Bookings</h1>
-              <p className="mt-2 text-gray-600">
-                View and track your appointments in one place.
-              </p>
-            </div>
+      <div className="mx-auto max-w-5xl">
+  <div className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+    {/* Page Heading */}
+    <div>
+      <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+        My Bookings
+      </h1>
+      <p className="mt-2 text-sm text-slate-500 sm:text-base">
+        View and track your appointments in one place.
+      </p>
+    </div>
 
-          <div className="flex w-full max-w-md flex-col gap-4 gap-y-3 md:flex-row md:items-center">
-  <div className="w-full flex-1">
-    <EnableNotifications
-      webPushEnabled={user?.webPushEnabled === true}
-      expoPushEnabled={user?.expoPushEnabled === true}
-      updateSession={update}
-    />
-  </div>
+    {/* Actions */}
+    <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
+      <div className="w-full sm:w-auto">
+        <EnableNotifications
+          webPushEnabled={user?.webPushEnabled === true}
+          expoPushEnabled={user?.expoPushEnabled === true}
+          updateSession={update}
+        />
+      </div>
 
-  <button
-    type="button"
-    onClick={() => fetchBookings(true)}
-    disabled={refreshing}
-    className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 md:w-auto md:flex-1"
-  >
-    <RefreshCw
-      size={16}
-      className={refreshing ? "animate-spin" : ""}
-    />
-    {refreshing ? "Refreshing..." : "Refresh"}
-  </button>
-</div>
+      <button
+        type="button"
+        onClick={() => fetchBookings(true)}
+        disabled={refreshing}
+        className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-2.5 sm:text-sm text-[15px] font-semibold text-slate-700 shadow-sm transition-all duration-200 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+      >
+        <RefreshCw
+          size={16}
+          className={refreshing ? "animate-spin" : ""}
+        />
+        {refreshing ? "Refreshing..." : "Refresh"}
+      </button>
+    </div>
+ 
           </div>
 
           {error && (

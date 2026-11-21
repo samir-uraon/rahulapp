@@ -8,9 +8,9 @@ export const metadata = {
   title: "ZERIY | Made Simpler And Much Faster",
   description: "Made Simpler & Much Faster",
   icons: {
-    icon: "/icon.png",
-    shortcut: "/icon.png",
-    apple: "/icon.png",
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
   },
 };
 

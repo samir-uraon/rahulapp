@@ -4,6 +4,7 @@ import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { toast } from "react-hot-toast";
 import { ArrowLeft } from "lucide-react";
+import Image from "next/image";
 
 export default function Signup() {
   const [formData, setFormData] = useState({
@@ -123,34 +124,35 @@ export default function Signup() {
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6 sm:py-10">
-        {/* Back Button */}
-    <div className="mx-auto mb-5 w-full max-w-md">
-  <button
-    type="button"
-    onClick={handleBack}
-    className="
-      group inline-flex items-center gap-2
-      rounded-xl border border-slate-200
-      bg-white px-4 py-2.5
-      text-sm font-semibold text-slate-600
-      shadow-sm transition-all duration-200
-      hover:border-indigo-200
-      hover:bg-indigo-50
-      hover:text-indigo-700
-      hover:shadow-md
-      active:scale-95
-    "
-  >
-    <ArrowLeft
-      size={17}
-      className="transition-transform duration-200 group-hover:-translate-x-1"
-    />
-    Home
-  </button>
-</div>
+        
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-md items-center justify-center sm:min-h-[calc(100vh-5rem)]">
         <div className="w-full rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:rounded-3xl sm:p-8">
+{/* Home Button */}
+        <div className="mx-auto mb-1 w-full max-w-md">
+          <button
+          type="button"
+          onClick={handleBack}
+          aria-label="Go back"
+          className="mb-5 inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+        >
+          <ArrowLeft size={20} />
+        </button>
+        </div>
+          {/* Header */}
+          <div className="mb-7 text-center">
 
+            {/* Zeriy Logo */}
+        <div className="mx-auto mb-4 flex h-[60px] w-[60px] items-center justify-center overflow-hidden rounded-2xl bg-indigo-600 shadow-lg shadow-indigo-600/20">
+            <Image
+              src="/logo.png"
+              alt="Zeriy Logo"
+              width={52}
+              height={52}
+              className="h-full w-full object-contain"
+              priority
+            />
+          </div>
+            
           {/* Header */}
           <div className="mb-6 text-center">
             <h2 className="text-xl font-black text-slate-900 sm:text-2xl">
@@ -161,7 +163,7 @@ export default function Signup() {
               Book tokens for yourself, children, or elderly family members
             </p>
           </div>
-
+</div>
           {/* Login / Signup Toggle */}
           <div className="mb-5 flex rounded-xl bg-slate-100 p-1 text-xs font-semibold sm:mb-6 sm:text-sm">
             <button

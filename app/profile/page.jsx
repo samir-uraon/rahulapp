@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
-import { MapPin, CalendarCheck, LogOut, LogIn } from "lucide-react";
+import { MapPin, CalendarCheck, LogOut, LogIn, Pencil, ArrowLeft, ArrowUpRight, LockKeyhole, ArrowRight } from "lucide-react";
 import toast from "react-hot-toast";
 import LocationPicker from "@/components/LocationPicker";
 import { useRouter } from "next/navigation";
@@ -198,22 +198,31 @@ export default function ProfilePage() {
   }
 
   if (status === "unauthenticated") {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-        <div className="w-full max-w-sm text-center">
-          <h1 className="text-xl font-bold text-gray-900">
-            Please login
-          </h1>
+  return (
+  <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-white to-indigo-50 px-4">
+    <div className="w-full max-w-sm rounded-2xl border border-slate-200/80 bg-white p-8 text-center shadow-lg shadow-indigo-100/50">
+      <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50">
+        <LockKeyhole className="h-7 w-7 text-indigo-600" />
+      </div>
 
-          <Link
-            href="/login"
-            className="mt-4 inline-flex w-full items-center justify-center rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700 sm:w-auto"
-          >
-            Go to Login
-          </Link>
-        </div>
-      </main>
-    );
+      <h1 className="text-xl font-bold tracking-tight text-slate-900">
+        Login Required
+      </h1>
+
+      <p className="mt-2 text-sm leading-6 text-slate-500">
+        Please log in to your account to continue.
+      </p>
+
+      <Link
+        href="/login"
+        className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-200 transition-all duration-200 hover:-translate-y-0.5 hover:bg-indigo-700 hover:shadow-lg active:scale-[0.98]"
+      >
+        Go to Login
+        <ArrowRight className="h-4 w-4" />
+      </Link>
+    </div>
+  </main>
+);
   }
 
   
@@ -221,84 +230,93 @@ export default function ProfilePage() {
   return (
     <main className="min-h-screen bg-gray-50">
       {/* HEADER */}
-      <header className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex min-h-[64px] w-full max-w-3xl items-center justify-between gap-3 px-4 sm:min-h-[72px] sm:px-6">
+    <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+  <div className="mx-auto flex min-h-16 w-full max-w-3xl items-center justify-between gap-3 px-3 sm:min-h-[72px] sm:px-6">
 
-          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-            <button
-              type="button"
-              onClick={() => router.back()}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-600 transition hover:bg-gray-100 active:bg-gray-200"
-            >
-              <span className="mb-1 text-2xl leading-none">
-                ‹
-              </span>
-            </button>
+    {/* Back + Title */}
+    <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+      <button
+        type="button"
+        onClick={() => router.back()}
+        aria-label="Go back"
+        className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-50 hover:text-indigo-600 active:scale-95"
+      >
+        <ArrowLeft size={18} />
+      </button>
 
-            <div className="min-w-0">
-              <h1 className="truncate text-base font-bold text-gray-900 sm:text-lg">
-                My Profile
-              </h1>
+      <div className="min-w-0 ml-1">
+        <h1 className="truncate text-sm font-bold text-slate-900 sm:text-lg">
+          My Profile
+        </h1>
+        <p className="truncate text-[10px] text-slate-500 sm:text-xs">
+          Manage your account
+        </p>
+      </div>
+    </div>
 
-              <p className="truncate text-[11px] text-gray-500 sm:text-xs">
-                Manage your account
-              </p>
-            </div>
-          </div>
-
-          <Link
-            href="/my-bookings"
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-indigo-700 active:scale-[0.98] sm:px-4 sm:text-sm"
-          >
-            <CalendarCheck size={16} />
-            <span>My Bookings</span>
-          </Link>
-        </div>
-      </header>
-
-      {/* PROFILE */}
-      <section className="mx-auto w-full max-w-3xl px-3 py-5 sm:px-6 sm:py-8">
-        <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-
-          {/* PROFILE TOP */}
-          <div className="border-b border-gray-100 px-4 py-5 sm:px-6 sm:py-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-indigo-100 sm:h-16 sm:w-16">
-                  <span className="text-xl font-bold text-indigo-600 sm:text-2xl">
-                    {user?.name?.charAt(0)?.toUpperCase() || "U"}
-                  </span>
-                </div>
-
-                <div className="min-w-0">
-                  <h2 className="truncate text-lg font-bold text-gray-900 sm:text-xl">
-                    {user?.name || "User"}
-                  </h2>
-
-                  <p className="text-xs text-gray-500 sm:text-sm">
-                    Zeriy Customer
-                  </p>
-                </div>
-              </div>
-<div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-  <EnableNotifications
-    webPushEnabled={user?.webPushEnabled === true}
-    expoPushEnabled={user?.expoPushEnabled === true}
-    updateSession={update}
+{/* Bookings */}
+<Link
+  href="/my-bookings"
+  className="group inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition-all duration-200 hover:border-indigo-300 hover:bg-indigo-100 hover:shadow-sm active:scale-[0.97] sm:px-4 sm:py-2.5 sm:text-sm"
+>
+  <CalendarCheck
+    size={16}
+    className="shrink-0 transition-transform duration-200 group-hover:scale-110"
   />
+  <span>My Bookings</span>
+ </Link>
+  </div>
+</header>
 
-  {!editing && (
-    <button
-      type="button"
-      onClick={() => setEditing(true)}
-      className="w-full rounded-xl bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-600 transition hover:bg-indigo-100 active:bg-indigo-200 sm:w-auto"
-    >
-      Edit Profile
-    </button>
-  )}
+{/* PROFILE */}
+<section className="mx-auto w-full max-w-3xl px-3 py-5 sm:px-6 sm:py-8">
+  <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+
+    {/* PROFILE TOP */}
+    {/* PROFILE TOP */}
+<div className="border-b border-slate-100 p-4 sm:p-5 lg:p-6">
+  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+
+    {/* User Details */}
+    <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+      <div className="flex size-14 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 ring-1 ring-indigo-100 sm:size-16">
+        <span className="text-xl font-extrabold text-indigo-600 sm:text-2xl">
+          {user?.name?.charAt(0)?.toUpperCase() || "U"}
+        </span>
+      </div>
+
+      <div className="min-w-0">
+        <h2 className="truncate text-xl font-bold text-slate-900 sm:text-xl lg:text-xl">
+          {user?.name || "User"}
+        </h2>
+        <p className="mt-0.5 text-xs font-medium text-slate-500 sm:text-sm">
+          Zeriy Customer
+        </p>
+      </div>
+    </div>
+
+    {/* Actions */}
+    <div className="flex min-w-0 flex-col gap-2 sm:w-auto sm:shrink-0 sm:flex-row sm:items-center sm:gap-2.5">
+
+      <EnableNotifications
+        webPushEnabled={user?.webPushEnabled === true}
+        expoPushEnabled={user?.expoPushEnabled === true}
+        updateSession={update}
+      />
+
+      {!editing && (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="inline-flex w-full shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 active:scale-[0.98] sm:w-auto"
+        >
+          <Pencil size={15} />
+          Edit Profile
+        </button>
+      )}
+    </div>
+  </div>
 </div>
-            </div>
-          </div>
 
           {/* ACCOUNT INFORMATION */}
           <div className="px-4 py-5 sm:px-6 sm:py-6">

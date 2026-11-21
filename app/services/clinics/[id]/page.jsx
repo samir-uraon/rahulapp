@@ -21,6 +21,7 @@ import {
   Users,
   AlertCircle,
   Palmtree,
+  ArrowUpRight,
 } from "lucide-react";
 
 async function calculateDistance(lat1, lng1, lat2, lng2) {
@@ -1198,86 +1199,95 @@ const doctors = useMemo(() => {
           </button>
 
           <section className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-            <div className="p-5 sm:p-7">
-              <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {clinic?.rating && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
-                        <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-                        {clinic.rating ?? "N/A"}
-                      </span>
-                    )}
+          <div className="p-4 sm:p-6 lg:p-7">
+  <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
 
-                    <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">
-                      {doctors.length}{" "}
-                      {doctors.length === 1 ? "Doctor" : "Doctors"}
-                    </span>
-                  </div>
+    {/* Clinic Information */}
+    <div className="min-w-0 flex-1">
+      {/* Badges */}
+      <div className="flex flex-wrap items-center gap-2">
+        {clinic?.rating && (
+          <span className="inline-flex items-center gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs font-bold text-amber-700">
+            <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+            {clinic.rating}
+          </span>
+        )}
 
-                  <h1 className="mt-3 text-2xl font-bold tracking-tight text-gray-900 sm:text-3xl">
-                    {clinic?.name || "Loading Clinic..."}
-                  </h1>
+        <span className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-50 px-2.5 py-1.5 text-xs font-bold text-indigo-700">
+          <Users className="h-3.5 w-3.5" />
+          {doctors.length} {doctors.length === 1 ? "Doctor" : "Doctors"}
+        </span>
+      </div>
 
-                  <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-                    <div className="flex min-w-0 items-start gap-2.5">
-                      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-50">
-                        <MapPin className="h-4 w-4 text-indigo-600" />
-                      </div>
+      {/* Name */}
+      <h1 className="mt-4 break-words text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl lg:text-[34px]">
+        {clinic?.name || "Loading Clinic..."}
+      </h1>
 
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                          Clinic location
-                        </p>
+      {/* Information */}
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
 
-                        <p className="mt-0.5 text-sm font-semibold text-gray-700">
-                          {clinic?.address || "Address unavailable"}
-                        </p>
-                      </div>
-                    </div>
+        {/* Address */}
+        <div className="flex min-w-0 items-start gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm ring-1 ring-slate-100">
+            <MapPin className="h-4 w-4 text-indigo-600" />
+          </div>
 
-                    {(distanceLoading || distance) && (
-                      <>
-                        <div className="hidden h-7 w-px bg-gray-200 sm:block" />
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              Clinic Address
+            </p>
+            <p className="mt-1 break-words text-xs font-semibold leading-relaxed text-slate-700 sm:text-sm">
+              {clinic?.address || "Address unavailable"}
+            </p>
+          </div>
+        </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Navigation className="h-4 w-4 text-indigo-500" />
-
-                          {distanceLoading ? (
-                            <span className="text-sm font-medium text-gray-400">
-                              Calculating road distance...
-                            </span>
-                          ) : distance ? (
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-sm font-semibold text-gray-600">
-                                {distance.distance < 1
-                                  ? `${Math.round(distance.distance * 1000)} m away`
-                                  : `${distance.distance.toFixed(1)} km away`}
-                              </span>
-                            </div>
-                          ) : null}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {clinic?.lat != null &&
-                  clinic?.lng != null &&
-                  Number.isFinite(Number(clinic.lat)) &&
-                  Number.isFinite(Number(clinic.lng)) && (
-                    <a
-                      href={`https://www.google.com/maps?q=${clinic.lat},${clinic.lng}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-5 py-3 text-sm font-bold text-indigo-700 transition hover:bg-indigo-100 sm:w-auto"
-                    >
-                      <Navigation className="h-4 w-4" />
-                      Get Directions
-                    </a>
-                  )}
-              </div>
+        {/* Distance */}
+        {(distanceLoading || distance) && (
+          <div className="flex min-w-0 items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm ring-1 ring-slate-100">
+              <Navigation className="h-4 w-4 text-indigo-600" />
             </div>
+
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Distance From You
+              </p>
+
+              <p className="mt-1 text-sm font-bold text-slate-800">
+                {distanceLoading
+                  ? "Calculating..."
+                  : distance
+                    ? distance.distance < 1
+                      ? `${Math.round(distance.distance * 1000)} meters`
+                      : `${distance.distance.toFixed(1)} km`
+                    : ""}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+
+    {/* Directions */}
+    {clinic?.lat != null &&
+      clinic?.lng != null &&
+      Number.isFinite(Number(clinic.lat)) &&
+      Number.isFinite(Number(clinic.lng)) && (
+        <a
+          href={`https://www.google.com/maps?q=${clinic.lat},${clinic.lng}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="group inline-flex w-full shrink-0 items-center justify-center gap-2.5 rounded-xl bg-indigo-600 px-6 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-600/15 transition-all duration-200 hover:-translate-y-0.5 hover:bg-indigo-700 hover:shadow-xl active:translate-y-0 sm:w-fit lg:self-center"
+        >
+          <Navigation className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+          Get Directions
+          <ArrowUpRight className="h-4 w-4 opacity-70" />
+        </a>
+      )}
+  </div>
+</div>
 
             <div className="border-t border-gray-100 bg-gray-50/70 px-5 py-3.5 sm:px-7">
               <div className="flex items-center gap-2">
@@ -1590,82 +1600,89 @@ const doctors = useMemo(() => {
                   </p>
                 </div>
 
-                <div className="space-y-4 p-3 sm:space-y-5 sm:p-4">
-                  {doctors.length === 0 ? (
-                    <p className="text-xs text-gray-500">
-                      No doctor schedules available.
-                    </p>
-                  ) : (
-                    doctors.map((doctor) => (
-                      <div key={doctor.id}>
-                        <p className="mb-1.5 px-1 text-[10px] font-bold text-gray-800 sm:text-[11px]">
-                          {doctor.name}
-                        </p>
+              <div className="space-y-5 p-3 sm:space-y-6 sm:p-4 md:p-5">
+  {doctors.length === 0 ? (
+    <p className="py-4 text-center text-xs text-gray-500 sm:text-sm">
+      No doctor schedules available.
+    </p>
+  ) : (
+    doctors.map((doctor) => (
+      <div key={doctor.id} className="min-w-0">
+        <p className="mb-2 px-2 text-sm font-bold text-gray-800 sm:text-base">
+          {doctor.name}
+        </p>
 
-                        <div className="space-y-1">
-                          {[
-                            "monday",
-                            "tuesday",
-                            "wednesday",
-                            "thursday",
-                            "friday",
-                            "saturday",
-                            "sunday",
-                          ].map((day) => {
-                            const schedule = getScheduleForDay(
-                              doctor.schedule,
-                              day
-                            );
-                            const isToday = day === today;
+        <div className="space-y-1">
+          {[
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+          ].map((day) => {
+            const schedule = getScheduleForDay(doctor.schedule, day);
+            const isToday = day === today;
 
-                            return (
-                              <div
-                                key={day}
-                                className={`flex items-start gap-2 rounded-md px-2.5 py-1.5 sm:px-3 sm:py-2 ${
-                                  isToday ? "bg-indigo-50" : ""
-                                }`}
-                              >
-                                <span
-                                  className={`w-14 shrink-0 text-[9px] capitalize sm:w-16 sm:text-[10px] ${
-                                    isToday
-                                      ? "font-bold text-indigo-700"
-                                      : "text-gray-600"
-                                  }`}
-                                >
-                                  {day}
-                                </span>
+            return (
+              <div
+                key={day}
+                className={`flex min-w-0 items-center justify-between gap-3 rounded-lg px-3 py-2 transition-colors sm:px-4 sm:py-3 ${
+                  isToday
+                    ? "bg-indigo-50 ring-1 ring-indigo-100"
+                    : "hover:bg-gray-100"
+                }`}
+              >
+                <div className="flex shrink-0 items-center gap-2">
+                  <span
+                    className={`text-xs capitalize sm:text-sm ${
+                      isToday
+                        ? "font-bold text-indigo-700"
+                        : "font-medium text-gray-600"
+                    }`}
+                  >
+                    {day}
+                  </span>
 
-                                <div
-                                  className={`min-w-0 flex-1 text-right text-[9px] leading-4 sm:text-[10px] ${
-                                    schedule?.active
-                                      ? "font-medium text-gray-700"
-                                      : "text-gray-400"
-                                  }`}
-                                >
-                                  {schedule?.active &&
-                                  schedule?.slots?.length > 0 ? (
-                                    <div>
-                                      {schedule.slots.map((slot, index) => (
-                                        <div
-                                          key={`${slot.open}-${slot.close}-${index}`}
-                                        >
-                                          {formatSlotTime(slot.open)} -{" "}
-                                          {formatSlotTime(slot.close)}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <span>Closed Today</span>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))
+                  {isToday && (
+                    <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[9px] font-semibold text-indigo-700 sm:text-[10px]">
+                      Today
+                    </span>
                   )}
                 </div>
+
+                <div
+                  className={`min-w-0 text-right text-[11px] leading-5 sm:text-xs md:text-sm ${
+                    schedule?.active && schedule?.slots?.length > 0
+                      ? "font-medium text-gray-700"
+                      : "text-gray-400"
+                  }`}
+                >
+                  {schedule?.active && schedule?.slots?.length > 0 ? (
+                    <div className="space-y-0.5">
+                      {schedule.slots.map((slot, index) => (
+                        <div
+                          key={`${slot.open}-${slot.close}-${index}`}
+                          className="break-words"
+                        >
+                          {formatSlotTime(slot.open)} -{" "}
+                          {formatSlotTime(slot.close)}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span>Closed</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    ))
+  )}
+</div>
               </div>
 
               <div className="mt-5 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">

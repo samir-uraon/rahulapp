@@ -431,16 +431,16 @@ return (
       type="button"
       onClick={handleToggle}
       disabled={loading}
-      className={`group inline-flex min-h-[42px] w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-semibold transition-all duration-200 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 ${
+      className={`group inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 py-2.5 sm:text-sm text-[15px] font-semibold transition-all duration-200 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-60 ${
         enabled
           ? "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
           : "bg-violet-600 text-white shadow-sm shadow-violet-200 hover:bg-violet-700"
       }`}
     >
       {loading ? (
-        <LoaderCircle size={17} className="animate-spin shrink-0" />
+        <LoaderCircle size={15} className="animate-spin shrink-0" />
       ) : enabled ? (
-        <CheckCircle size={17} className="shrink-0" />
+        <CheckCircle size={15} className="shrink-0" />
       ) : (
         <Bell
           size={17}

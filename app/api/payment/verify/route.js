@@ -1,4 +1,3 @@
-
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 import clientPromise from "@/lib/mongodb";
@@ -18,6 +17,13 @@ const CATEGORY_COLLECTIONS = {
   "diagnostic-centre": "diagnostic",
 };
 
+const DEFAULT_SERVICE_NAMES = {
+  clinic: "General Consultation",
+  saloon: "Salon Appointment",
+  "beauty-parlour": "Beauty Service",
+  "diagnostic-centre": "Diagnostic Test",
+};
+
 function jsonResponse(body, status = 200) {
   return NextResponse.json(body, {
     status,
@@ -29,43 +35,78 @@ function jsonResponse(body, status = 200) {
 
 function normalizeId(value) {
   if (value === null || value === undefined) return "";
+  if (value instanceof ObjectId) return value.toString();
+  if (typeof value === "object") {
+    if (typeof value.toHexString === "function") return value.toHexString();
+    if (typeof value.$oid === "string") return value.$oid;
+    return normalizeId(
+      value._id ?? value.id ?? value.teamMemberId ?? value.employeeId ?? ""
+    );
+  }
   return String(value).trim();
 }
 
 function normalizeEmail(value) {
-  return typeof value === "string"
-    ? value.trim().toLowerCase()
-    : "";
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
-function getDoctorId(value) {
-  if (typeof value === "string") return value.trim();
-
-  if (value instanceof ObjectId) return value.toString();
-
-  if (value && typeof value === "object") {
-    return normalizeId(value._id ?? value.id ?? "");
-  }
-
-  return "";
-}
-
-function getClinicIds(clinic) {
+function getBusinessIds(business) {
   return [
-    normalizeId(clinic?.id),
-    normalizeId(clinic?._id),
+    normalizeId(business?.id),
+    normalizeId(business?._id),
   ].filter(Boolean);
 }
 
-function getClinicName(clinic) {
-  return clinic?.name || clinic?.clinicName || "";
+function getAssignedBusinessIds(member) {
+  const ids = [
+    member?.clinicId,
+    member?.storeId,
+    member?.businessId,
+    member?.assignedClinicId,
+    member?.assignedStoreId,
+    member?.assignedBusinessId,
+    member?.clinic?._id,
+    member?.clinic?.id,
+    member?.store?._id,
+    member?.store?.id,
+    member?.business?._id,
+    member?.business?.id,
+  ];
+
+  const arrayFields = [
+    member?.clinicIds,
+    member?.storeIds,
+    member?.businessIds,
+    member?.assignedClinics,
+    member?.assignedStores,
+    member?.assignedBusinesses,
+  ];
+
+  for (const list of arrayFields) {
+    if (Array.isArray(list)) {
+      ids.push(...list.map(normalizeId));
+    }
+  }
+
+  return [...new Set(ids.map(normalizeId).filter(Boolean))];
 }
 
-function getDoctorName(doctor) {
+function getBusinessName(business) {
   return (
-    doctor?.fullName ||
-    doctor?.name ||
-    doctor?.doctorName ||
+    business?.name ||
+    business?.clinicName ||
+    business?.storeName ||
+    business?.businessName ||
+    ""
+  );
+}
+
+function getProviderName(provider) {
+  return (
+    provider?.fullName ||
+    provider?.name ||
+    provider?.doctorName ||
+    provider?.staffName ||
     ""
   );
 }
@@ -75,10 +116,9 @@ function parseTime(value) {
     return null;
   }
 
-  const match =
-    /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i.exec(
-      String(value).trim()
-    );
+  const match = /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i.exec(
+    String(value).trim()
+  );
 
   if (!match) return null;
 
@@ -90,9 +130,7 @@ function parseTime(value) {
 
   if (meridiem) {
     if (hour < 1 || hour > 12) return null;
-
     hour %= 12;
-
     if (meridiem === "PM") {
       hour += 12;
     }
@@ -103,26 +141,10 @@ function parseTime(value) {
   return hour * 60 + minute;
 }
 
-function getIndiaDateString(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-
-  const values = Object.fromEntries(
-    parts.map(({ type, value }) => [type, value])
-  );
-
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
 function isValidDateString(value) {
   if (typeof value !== "string") return false;
 
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-
   if (!match) return false;
 
   const [year, month, day] = [
@@ -150,15 +172,12 @@ function priorityRank(priority) {
 }
 
 function normalizePriority(paymentOrder) {
-  const priority = String(
-    paymentOrder?.priority || "normal"
-  )
+  const priority = String(paymentOrder?.priority || "normal")
     .trim()
     .toLowerCase();
 
   const isEmergency =
-    paymentOrder?.isEmergency === true ||
-    priority === "emergency";
+    paymentOrder?.isEmergency === true || priority === "emergency";
 
   if (isEmergency) return "emergency";
   if (priority === "elderly") return "elderly";
@@ -168,16 +187,11 @@ function normalizePriority(paymentOrder) {
 
 function sortQueue(items) {
   return [...items].sort((a, b) => {
-    const difference =
-      priorityRank(a.priority) - priorityRank(b.priority);
-
+    const difference = priorityRank(a.priority) - priorityRank(b.priority);
     if (difference !== 0) return difference;
 
-    const sequenceA =
-      Number(a.sequence) || Number.MAX_SAFE_INTEGER;
-
-    const sequenceB =
-      Number(b.sequence) || Number.MAX_SAFE_INTEGER;
+    const sequenceA = Number(a.sequence) || Number.MAX_SAFE_INTEGER;
+    const sequenceB = Number(b.sequence) || Number.MAX_SAFE_INTEGER;
 
     if (sequenceA !== sequenceB) {
       return sequenceA - sequenceB;
@@ -200,7 +214,7 @@ function getScheduleDay(schedule, dayKey) {
   return matchingKey ? schedule[matchingKey] : null;
 }
 
-function getConfiguredSlot(doctor, dateString, selectedSlot) {
+function getConfiguredSlot(provider, dateString, selectedSlot) {
   if (!isValidDateString(dateString) || !selectedSlot) {
     return null;
   }
@@ -217,16 +231,10 @@ function getConfiguredSlot(doctor, dateString, selectedSlot) {
     "saturday",
   ];
 
-  const dayKey = dayNames[
-    new Date(
-      Date.UTC(year, month - 1, day, 12)
-    ).getUTCDay()
-  ];
+  const dayKey =
+    dayNames[new Date(Date.UTC(year, month - 1, day, 12)).getUTCDay()];
 
-  const scheduleDay = getScheduleDay(
-    doctor?.schedule,
-    dayKey
-  );
+  const scheduleDay = getScheduleDay(provider?.schedule, dayKey);
 
   if (!scheduleDay || scheduleDay.active !== true) {
     return null;
@@ -252,31 +260,28 @@ function getConfiguredSlot(doctor, dateString, selectedSlot) {
   );
 }
 
-async function findClinic(collection, clinicId) {
-  const conditions = [
-    { id: clinicId },
-    { _id: clinicId },
-  ];
+async function findBusiness(collection, businessId) {
+  const conditions = [{ id: businessId }, { _id: businessId }];
 
-  if (ObjectId.isValid(clinicId)) {
-    conditions.push({
-      _id: new ObjectId(clinicId),
-    });
+  if (ObjectId.isValid(businessId)) {
+    conditions.push({ _id: new ObjectId(businessId) });
   }
 
-  return collection.findOne({
-    $or: conditions,
-  });
+  return collection.findOne({ $or: conditions });
 }
 
-async function findDoctor(team, doctorId) {
-  if (!ObjectId.isValid(doctorId)) return null;
+async function findProvider(team, providerId, category) {
+  if (!ObjectId.isValid(providerId)) return null;
+
+  const isClinic = category === "clinic";
 
   return team.findOne({
-    _id: new ObjectId(doctorId),
-    role: "doctor",
-    category: "clinic",
+    _id: new ObjectId(providerId),
     isActive: { $ne: false },
+    $or: [
+      { category },
+      ...(isClinic ? [{ category: { $exists: false } }] : []),
+    ],
   });
 }
 
@@ -284,17 +289,10 @@ function getCreatedBy(paymentOrder) {
   const creator = paymentOrder?.createdBy || {};
 
   return {
-    id: normalizeId(
-      creator.id ||
-      paymentOrder?.userId
-    ),
-    role: String(
-      creator.role || "patient"
-    ).trim().toLowerCase(),
+    id: normalizeId(creator.id || paymentOrder?.userId),
+    role: String(creator.role || "patient").trim().toLowerCase(),
     name: String(creator.name || "").trim(),
-    email: normalizeEmail(
-      creator.email || paymentOrder?.userEmail
-    ),
+    email: normalizeEmail(creator.email || paymentOrder?.userEmail),
   };
 }
 
@@ -307,8 +305,9 @@ async function savePaymentRecord(
     userId,
     userEmail,
     createdBy,
-    clinicId,
-    doctorId,
+    businessId,
+    providerId,
+    isClinic,
     category,
     collection,
     amount,
@@ -332,8 +331,11 @@ async function savePaymentRecord(
           name: "",
           email: userEmail,
         },
-        clinicId,
-        doctorId,
+        businessId,
+        providerId,
+        ...(isClinic
+          ? { clinicId: businessId, doctorId: providerId }
+          : { storeId: businessId, staffId: providerId }),
         category,
         collection,
         amount,
@@ -352,27 +354,21 @@ async function savePaymentRecord(
 
 /*
  * Emergency notification helper.
- *
  * Calls /api/notifications/send only when invoked for an emergency booking.
- * The patient's session cookie is forwarded so the notification API can
- * authenticate the request using getServerSession().
  */
 async function sendEmergencyNotification(
   request,
-  {
-    doctorId,
-    patientName,
-    arrivalTime,
-    bookingReference,
-  }
+  { providerId, doctorId, patientName, arrivalTime, bookingReference }
 ) {
   try {
-    if (!doctorId || !bookingReference) {
+    const targetId = providerId || doctorId;
+
+    if (!targetId || !bookingReference) {
       return {
         success: false,
         pushSent: 0,
         saved: 0,
-        reason: "Missing doctor ID or booking reference",
+        reason: "Missing provider ID or booking reference",
       };
     }
 
@@ -387,12 +383,7 @@ async function sendEmergencyNotification(
       `Emergency patient ${patientName} will arrive ` +
       `${arrivalMessage}. Please prepare for the patient's arrival.`;
 
-    // Use the current request origin to construct an absolute URL.
-    const notificationUrl = new URL(
-      "/api/notifications/send",
-      request.url
-    );
-
+    const notificationUrl = new URL("/api/notifications/send", request.url);
     const cookie = request.headers.get("cookie");
 
     const response = await fetch(notificationUrl.toString(), {
@@ -403,7 +394,8 @@ async function sendEmergencyNotification(
       },
       cache: "no-store",
       body: JSON.stringify({
-        doctorId,
+        doctorId: targetId,
+        providerId: targetId,
         title: "Emergency Patient Arrival",
         message,
         url: "/doctor/dashboard",
@@ -412,11 +404,6 @@ async function sendEmergencyNotification(
     });
 
     const result = await response.json().catch(() => ({}));
-
-    console.log("Emergency notification API response:", {
-      status: response.status,
-      result,
-    });
 
     return {
       success: response.ok && result.success === true,
@@ -466,16 +453,9 @@ export async function POST(request) {
   try {
     const keyId = process.env.RAZORPAY_KEY_ID;
     const keySecret = process.env.RAZORPAY_KEY_SECRET;
-    const authSecret =
-      process.env.AUTH_SECRET ||
-      process.env.NEXTAUTH_SECRET;
+    const authSecret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
 
-    if (
-      !keyId ||
-      !keySecret ||
-      !authSecret ||
-      !process.env.MONGODB
-    ) {
+    if (!keyId || !keySecret || !authSecret || !process.env.MONGODB) {
       return jsonResponse(
         {
           success: false,
@@ -595,19 +575,14 @@ export async function POST(request) {
 
     // 5. Validate ownership using the account that created the order.
     const createdBy = getCreatedBy(paymentOrder);
-
     const ownerId = createdBy.id;
     const ownerEmail = createdBy.email;
 
     const belongsById =
-      Boolean(tokenUserId) &&
-      Boolean(ownerId) &&
-      tokenUserId === ownerId;
+      Boolean(tokenUserId) && Boolean(ownerId) && tokenUserId === ownerId;
 
     const belongsByEmail =
-      Boolean(tokenEmail) &&
-      Boolean(ownerEmail) &&
-      tokenEmail === ownerEmail;
+      Boolean(tokenEmail) && Boolean(ownerEmail) && tokenEmail === ownerEmail;
 
     if (!belongsById && !belongsByEmail) {
       return jsonResponse(
@@ -619,9 +594,7 @@ export async function POST(request) {
       );
     }
 
-    const bookingReference = normalizeId(
-      paymentOrder.reference
-    );
+    const bookingReference = normalizeId(paymentOrder.reference);
 
     if (!bookingReference) {
       return jsonResponse(
@@ -650,80 +623,72 @@ export async function POST(request) {
       return jsonResponse(
         {
           success: false,
-          message:
-            "Payment is not captured or does not match the order.",
+          message: "Payment is not captured or does not match the order.",
         },
         400
       );
     }
 
-    const category = String(
-      paymentOrder.category || "clinic"
-    )
+    const category = String(paymentOrder.category || "clinic")
       .trim()
       .toLowerCase();
 
-    const collectionName =
-      CATEGORY_COLLECTIONS[category] || "clinics";
-
-    // This endpoint currently processes clinic doctor bookings.
-    if (category !== "clinic" || collectionName !== "clinics") {
+    if (!Object.hasOwn(CATEGORY_COLLECTIONS, category)) {
       return jsonResponse(
         {
           success: false,
-          message:
-            "This verification endpoint only supports clinic bookings.",
+          message: "Unsupported booking category.",
         },
         400
       );
     }
 
+    const isClinic = category === "clinic";
+    const collectionName = CATEGORY_COLLECTIONS[category];
     const now = new Date();
 
-    // 7. Read saved patient and appointment details.
-    const patient = paymentOrder.patient || {};
+    // 7. Read saved customer/patient and appointment details.
+    const customer = paymentOrder.customer || paymentOrder.patient || {};
     const appointment = paymentOrder.appointment || {};
     const slot = appointment.slot || {};
 
-    const patientName = String(
-      patient.name ||
-      paymentOrder.patientName ||
-      ""
+    const customerName = String(
+      customer.name ||
+        paymentOrder.customerName ||
+        paymentOrder.patientName ||
+        ""
     ).trim();
 
-    const patientPhone = String(
-      patient.phone ||
-      paymentOrder.patientPhone ||
-      paymentOrder.phone ||
-      ""
+    const customerPhone = String(
+      customer.phone ||
+        paymentOrder.customerPhone ||
+        paymentOrder.patientPhone ||
+        paymentOrder.phone ||
+        ""
     ).trim();
 
-    const patientType = String(
-      patient.type ||
-      paymentOrder.patientType ||
-      "self"
+    const customerType = String(
+      customer.type ||
+        paymentOrder.bookingFor ||
+        paymentOrder.patientType ||
+        "self"
     ).trim();
 
-    const patientAge =
-      patient.age ?? paymentOrder.age ?? null;
+    const customerAge = customer.age ?? paymentOrder.age ?? null;
 
-    const patientGender = String(
-      patient.gender ||
-      paymentOrder.gender ||
-      ""
+    const customerGender = String(
+      customer.gender || paymentOrder.gender || ""
     ).trim();
 
     const priority = normalizePriority(paymentOrder);
     const isEmergency = priority === "emergency";
 
     const bookingType = String(
-      paymentOrder.bookingType || "normal"
+      paymentOrder.bookingType || "appointment"
     ).trim();
 
     const arrivalTime =
-      appointment.arrivalTime ??
-      paymentOrder.arrivalTime ??
-      null;
+      appointment.arrivalTime ?? paymentOrder.arrivalTime ?? null;
 
     // 8. Idempotency: do not create a duplicate booking.
     const existingBooking = await bookings.findOne({
@@ -735,13 +700,8 @@ export async function POST(request) {
     });
 
     if (existingBooking) {
-      const existingOwnerId = normalizeId(
-        existingBooking.userId
-      );
-
-      const existingOwnerEmail = normalizeEmail(
-        existingBooking.userEmail
-      );
+      const existingOwnerId = normalizeId(existingBooking.userId);
+      const existingOwnerEmail = normalizeEmail(existingBooking.userEmail);
 
       const sameOwner =
         (ownerId && existingOwnerId === ownerId) ||
@@ -751,12 +711,22 @@ export async function POST(request) {
         return jsonResponse(
           {
             success: false,
-            message:
-              "The existing booking belongs to another user.",
+            message: "The existing booking belongs to another user.",
           },
           403
         );
       }
+
+      const existingBusinessId = normalizeId(
+        existingBooking.businessId ||
+          existingBooking.clinicId ||
+          existingBooking.storeId
+      );
+      const existingProviderId = normalizeId(
+        existingBooking.providerId ||
+          existingBooking.doctorId ||
+          existingBooking.staffId
+      );
 
       await savePaymentRecord(paymentRecords, {
         paymentId,
@@ -765,8 +735,9 @@ export async function POST(request) {
         userId: ownerId,
         userEmail: ownerEmail,
         createdBy,
-        clinicId: existingBooking.clinicId,
-        doctorId: existingBooking.doctorId,
+        businessId: existingBusinessId,
+        providerId: existingProviderId,
+        isClinic,
         category,
         collection: collectionName,
         amount: payment.amount,
@@ -793,28 +764,21 @@ export async function POST(request) {
         }
       );
 
-      // Retry emergency notification for an already-created booking.
-      // Your notification API's dedupeKey prevents duplicate records.
       let notificationResult = null;
 
-      if (
-        isEmergency &&
-        ACTIVE_STATUSES.includes(existingBooking.status)
-      ) {
-        notificationResult = await sendEmergencyNotification(
-          request,
-          {
-            doctorId: normalizeId(existingBooking.doctorId),
-            patientName:
-              existingBooking.patientName ||
-              existingBooking.patient?.name ||
-              patientName,
-            arrivalTime:
-              existingBooking.arrivalTime ?? arrivalTime,
-            bookingReference:
-              existingBooking.bookingReference || bookingReference,
-          }
-        );
+      if (isEmergency && ACTIVE_STATUSES.includes(existingBooking.status)) {
+        notificationResult = await sendEmergencyNotification(request, {
+          providerId: existingProviderId,
+          doctorId: existingProviderId,
+          patientName:
+            existingBooking.customerName ||
+            existingBooking.patientName ||
+            existingBooking.patient?.name ||
+            customerName,
+          arrivalTime: existingBooking.arrivalTime ?? arrivalTime,
+          bookingReference:
+            existingBooking.bookingReference || bookingReference,
+        });
       }
 
       return jsonResponse({
@@ -829,9 +793,7 @@ export async function POST(request) {
     }
 
     // 9. Acquire a verification lock for this payment order.
-    const staleLockBefore = new Date(
-      Date.now() - 2 * 60 * 1000
-    );
+    const staleLockBefore = new Date(Date.now() - 2 * 60 * 1000);
 
     const lockResult = await orders.updateOne(
       {
@@ -840,9 +802,7 @@ export async function POST(request) {
           { status: { $in: ["pending", "created"] } },
           {
             status: "verifying",
-            verificationStartedAt: {
-              $lt: staleLockBefore,
-            },
+            verificationStartedAt: { $lt: staleLockBefore },
           },
           {
             status: "verifying",
@@ -870,33 +830,30 @@ export async function POST(request) {
 
       if (
         retryBooking &&
-        (
-          (ownerId &&
-            normalizeId(retryBooking.userId) === ownerId) ||
-          (ownerEmail &&
-            normalizeEmail(retryBooking.userEmail) === ownerEmail)
-        )
+        ((ownerId && normalizeId(retryBooking.userId) === ownerId) ||
+          (ownerEmail && normalizeEmail(retryBooking.userEmail) === ownerEmail))
       ) {
         let notificationResult = null;
 
-        if (
-          isEmergency &&
-          ACTIVE_STATUSES.includes(retryBooking.status)
-        ) {
-          notificationResult = await sendEmergencyNotification(
-            request,
-            {
-              doctorId: normalizeId(retryBooking.doctorId),
-              patientName:
-                retryBooking.patientName ||
-                retryBooking.patient?.name ||
-                patientName,
-              arrivalTime:
-                retryBooking.arrivalTime ?? arrivalTime,
-              bookingReference:
-                retryBooking.bookingReference || bookingReference,
-            }
+        if (isEmergency && ACTIVE_STATUSES.includes(retryBooking.status)) {
+          const retryProviderId = normalizeId(
+            retryBooking.providerId ||
+              retryBooking.doctorId ||
+              retryBooking.staffId
           );
+
+          notificationResult = await sendEmergencyNotification(request, {
+            providerId: retryProviderId,
+            doctorId: retryProviderId,
+            patientName:
+              retryBooking.customerName ||
+              retryBooking.patientName ||
+              retryBooking.patient?.name ||
+              customerName,
+            arrivalTime: retryBooking.arrivalTime ?? arrivalTime,
+            bookingReference:
+              retryBooking.bookingReference || bookingReference,
+          });
         }
 
         return jsonResponse({
@@ -924,16 +881,24 @@ export async function POST(request) {
     lockAcquired = true;
 
     // 10. Validate saved appointment details.
-    const clinicId = normalizeId(paymentOrder.clinicId);
-    const doctorId = normalizeId(paymentOrder.doctorId);
+    const businessId = normalizeId(
+      paymentOrder.businessId ||
+        paymentOrder.clinicId ||
+        paymentOrder.storeId
+    );
+    const providerId = normalizeId(
+      paymentOrder.providerId ||
+        paymentOrder.doctorId ||
+        paymentOrder.staffId
+    );
 
     if (
-      !clinicId ||
-      !ObjectId.isValid(doctorId) ||
+      !businessId ||
+      !ObjectId.isValid(providerId) ||
       !isValidDateString(appointment.date) ||
       !slot.open ||
       !slot.close ||
-      !patientName
+      !customerName
     ) {
       await releaseLock();
 
@@ -946,85 +911,93 @@ export async function POST(request) {
       );
     }
 
-    // 11. Find the clinic.
-    const clinics = db.collection(collectionName);
-    const clinic = await findClinic(clinics, clinicId);
+    // 11. Find the business (clinic / salon / parlour / diagnostic).
+    const businesses = db.collection(collectionName);
+    const business = await findBusiness(businesses, businessId);
 
-    if (!clinic) {
+    if (!business) {
       await releaseLock();
 
       return jsonResponse(
         {
           success: false,
-          message: "Clinic not found.",
+          message: "Business not found.",
         },
         404
       );
     }
 
-    // 12. Validate doctor membership in the clinic.
-    const clinicDoctorIds = Array.isArray(clinic.doctors)
-      ? clinic.doctors.map(getDoctorId)
-      : [];
+    const businessIds = getBusinessIds(business);
 
-    if (!clinicDoctorIds.includes(doctorId)) {
-      await releaseLock();
+    // 12. Validate provider membership in the business.
+    const rawProviderList = [
+      ...(Array.isArray(business.doctors) ? business.doctors : []),
+      ...(Array.isArray(business.staff) ? business.staff : []),
+      ...(Array.isArray(business.team) ? business.team : []),
+      ...(Array.isArray(business.members) ? business.members : []),
+    ];
 
-      return jsonResponse(
-        {
-          success: false,
-          message:
-            "This doctor is not assigned to the selected clinic.",
-        },
-        404
-      );
-    }
-
-    // 13. Fetch doctor by MongoDB ObjectId.
-    const doctor = await findDoctor(team, doctorId);
-
-    if (!doctor) {
-      await releaseLock();
-
-      return jsonResponse(
-        {
-          success: false,
-          message: "Doctor not found or inactive.",
-        },
-        404
-      );
-    }
-
-    const doctorClinicId = normalizeId(doctor.clinicId);
+    const linkedProviderIds = rawProviderList
+      .map(normalizeId)
+      .filter(Boolean);
 
     if (
-      doctorClinicId &&
-      !getClinicIds(clinic).includes(doctorClinicId)
+      linkedProviderIds.length > 0 &&
+      !linkedProviderIds.includes(providerId)
     ) {
       await releaseLock();
 
       return jsonResponse(
         {
           success: false,
-          message: "Doctor is not assigned to this clinic.",
+          message: "This specialist is not assigned to the selected business.",
+        },
+        404
+      );
+    }
+
+    // 13. Fetch provider by MongoDB ObjectId.
+    const provider = await findProvider(team, providerId, category);
+
+    if (!provider) {
+      await releaseLock();
+
+      return jsonResponse(
+        {
+          success: false,
+          message: "Specialist not found or inactive.",
+        },
+        404
+      );
+    }
+
+    const providerAssignedIds = getAssignedBusinessIds(provider);
+
+    if (
+      providerAssignedIds.length > 0 &&
+      !providerAssignedIds.some((id) => businessIds.includes(id))
+    ) {
+      await releaseLock();
+
+      return jsonResponse(
+        {
+          success: false,
+          message: "Specialist is not assigned to this business.",
         },
         409
       );
     }
 
-    // 14. Validate the slot against the doctor's current schedule.
-    const configuredSlot = getConfiguredSlot(
-      doctor,
-      appointment.date,
-      slot
-    );
+    // 14. Validate the slot against the provider's current schedule.
+    const configuredSlot = getConfiguredSlot(provider, appointment.date, slot);
 
     if (!configuredSlot) {
       console.error("Verification slot mismatch:", {
-        doctorId,
+        providerId,
+        category,
         appointmentDate: appointment.date,
         requestedSlot: slot,
-        savedSchedule: doctor.schedule,
+        savedSchedule: provider.schedule,
       });
 
       await releaseLock();
@@ -1032,25 +1005,27 @@ export async function POST(request) {
       return jsonResponse(
         {
           success: false,
-          message:
-            "The selected appointment slot is no longer available.",
+          message: "The selected appointment slot is no longer available.",
         },
         409
       );
     }
 
-    const duration = Number(
-      doctor.duration ?? doctor.checkupDuration
+    const rawDuration = Number(
+      provider.duration ??
+        provider.checkupDuration ??
+        provider.serviceDuration ??
+        provider.slotDuration ??
+        (isClinic ? NaN : 15)
     );
 
-    if (!Number.isFinite(duration) || duration <= 0) {
+    if (!Number.isFinite(rawDuration) || rawDuration <= 0) {
       await releaseLock();
 
       return jsonResponse(
         {
           success: false,
-          message:
-            "A valid consultation duration is not configured.",
+          message: "A valid consultation or service duration is not configured.",
         },
         409
       );
@@ -1058,18 +1033,29 @@ export async function POST(request) {
 
     // 15. Load the active queue for this exact slot.
     const queueFilter = {
-      clinicId,
-      doctorId,
-      date: appointment.date,
-      "slot.open": configuredSlot.open,
-      "slot.close": configuredSlot.close,
-      status: { $in: ACTIVE_STATUSES },
+      $and: [
+        {
+          $or: [
+            { businessId: { $in: businessIds } },
+            { clinicId: { $in: businessIds } },
+            { storeId: { $in: businessIds } },
+          ],
+        },
+        {
+          $or: [
+            { providerId },
+            { doctorId: providerId },
+            { staffId: providerId },
+          ],
+        },
+        { date: appointment.date },
+        { "slot.open": configuredSlot.open },
+        { "slot.close": configuredSlot.close },
+        { status: { $in: ACTIVE_STATUSES } },
+      ],
     };
 
-    const queue = sortQueue(
-      await bookings.find(queueFilter).toArray()
-    );
-
+    const queue = sortQueue(await bookings.find(queueFilter).toArray());
     const capacity = Number(configuredSlot.capacity);
 
     if (
@@ -1086,8 +1072,9 @@ export async function POST(request) {
         userId: ownerId,
         userEmail: ownerEmail,
         createdBy,
-        clinicId,
-        doctorId,
+        businessId,
+        providerId,
+        isClinic,
         category,
         collection: collectionName,
         amount: payment.amount,
@@ -1114,8 +1101,6 @@ export async function POST(request) {
         }
       );
 
-      // Payment was captured, but no booking was created.
-      // Do not send an emergency arrival notification.
       lockAcquired = false;
 
       return jsonResponse(
@@ -1131,12 +1116,19 @@ export async function POST(request) {
 
     // 16. Generate the next queue token.
     const sequence =
-      Math.max(
-        0,
-        ...queue.map((item) => Number(item.sequence) || 0)
-      ) + 1;
+      Math.max(0, ...queue.map((item) => Number(item.sequence) || 0)) + 1;
 
     const bookingNow = new Date();
+    const resolvedBusinessName = getBusinessName(business);
+    const resolvedProviderName = getProviderName(provider);
+
+    const customerData = {
+      name: customerName,
+      phone: customerPhone,
+      type: customerType,
+      age: customerAge,
+      gender: customerGender,
+    };
 
     // 17. Create booking.
     const booking = {
@@ -1150,18 +1142,45 @@ export async function POST(request) {
 
       createdBy,
 
-      clinicId,
-      clinicName: getClinicName(clinic),
-      address: clinic.address || "",
+      businessId,
+      businessName: resolvedBusinessName,
+      ...(isClinic
+        ? {
+            clinicId: businessId,
+            clinicName: resolvedBusinessName,
+          }
+        : {
+            storeId: businessId,
+            storeName: resolvedBusinessName,
+            clinicId: businessId,
+            clinicName: resolvedBusinessName,
+          }),
+
+      address: business.address || "",
 
       category,
       collection: collectionName,
 
-      doctorId,
-      doctorName: getDoctorName(doctor),
-      duration,
+      providerId,
+      providerName: resolvedProviderName,
+      ...(isClinic
+        ? {
+            doctorId: providerId,
+            doctorName: resolvedProviderName,
+          }
+        : {
+            staffId: providerId,
+            staffName: resolvedProviderName,
+            doctorId: providerId,
+            doctorName: resolvedProviderName,
+          }),
 
-      serviceName: "General Consultation",
+      duration: rawDuration,
+
+      serviceName:
+        paymentOrder.serviceName ||
+        DEFAULT_SERVICE_NAMES[category] ||
+        "Appointment",
       date: appointment.date,
       time: appointment.time || configuredSlot.open,
 
@@ -1169,30 +1188,24 @@ export async function POST(request) {
         open: configuredSlot.open,
         close: configuredSlot.close,
         ...(configuredSlot.checkupStartTime
-          ? {
-              checkupStartTime:
-                configuredSlot.checkupStartTime,
-            }
+          ? { checkupStartTime: configuredSlot.checkupStartTime }
           : slot.checkupStartTime
-            ? {
-                checkupStartTime:
-                  slot.checkupStartTime,
-              }
+            ? { checkupStartTime: slot.checkupStartTime }
             : {}),
       },
 
-      patient: {
-        name: patientName,
-        phone: patientPhone,
-        type: patientType,
-        age: patientAge,
-        gender: patientGender,
-      },
+      customer: customerData,
+      patient: customerData,
 
-      patientName,
-      patientPhone,
-      patientAge,
-      patientGender,
+      customerName,
+      customerPhone,
+      customerAge,
+      customerGender,
+
+      patientName: customerName,
+      patientPhone: customerPhone,
+      patientAge: customerAge,
+      patientGender: customerGender,
 
       priority,
       isEmergency,
@@ -1227,8 +1240,9 @@ export async function POST(request) {
       userId: ownerId,
       userEmail: ownerEmail,
       createdBy,
-      clinicId,
-      doctorId,
+      businessId,
+      providerId,
+      isClinic,
       category,
       collection: collectionName,
       amount: payment.amount,
@@ -1262,20 +1276,13 @@ export async function POST(request) {
     let notificationResult = null;
 
     if (isEmergency) {
-      notificationResult = await sendEmergencyNotification(
-        request,
-        {
-          doctorId,
-          patientName,
-          arrivalTime,
-          bookingReference,
-        }
-      );
-
-      console.log(
-        "Emergency notification result:",
-        notificationResult
-      );
+      notificationResult = await sendEmergencyNotification(request, {
+        providerId,
+        doctorId: providerId,
+        patientName: customerName,
+        arrivalTime,
+        bookingReference,
+      });
     }
 
     // 22. Release verification lock.
@@ -1291,10 +1298,7 @@ export async function POST(request) {
       booking: savedBooking,
     });
   } catch (error) {
-    console.error(
-      "Payment verification error:",
-      error?.message || error
-    );
+    console.error("Payment verification error:", error?.message || error);
 
     if (db && lockedOrderId && lockAcquired) {
       try {
@@ -1316,10 +1320,7 @@ export async function POST(request) {
 
         lockAcquired = false;
       } catch (resetError) {
-        console.error(
-          "Failed to reset verification lock:",
-          resetError
-        );
+        console.error("Failed to reset verification lock:", resetError);
       }
     }
 

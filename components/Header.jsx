@@ -54,7 +54,7 @@ export default function Header({ user, showBack = false }) {
                 Zeriy
               </h1>
 
-              <p className="hidden whitespace-nowrap text-[11px] text-gray-500 sm:block sm:text-xs">
+              <p className="whitespace-nowrap text-[11px] text-gray-500 sm:block sm:text-xs">
                 Made Simpler & Much Faster
               </p>
             </div>
@@ -90,7 +90,8 @@ export default function Header({ user, showBack = false }) {
   <span className="hidden whitespace-nowrap text-sm font-semibold sm:inline">
     Plans
   </span>
-</Link>*/}
+</Link>
+*/}
 
           {/* DESKTOP PROFILE */}
           <Link
